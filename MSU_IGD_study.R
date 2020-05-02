@@ -3,6 +3,7 @@ library(dplyr); library(lmerTest); library(psych)
 # read in data
 
 df <- as.data.frame(read.csv("df.csv"))
+
 df <- df[which(df$group !="REL" | is.na(df$group)),]
 df$group<-droplevels(df$group)
 
@@ -13,49 +14,78 @@ headArray <- function(first,last, df = df) match(first, names(df)):match(last, n
 df[headArray("ID", "ihh_race", df)] <- data.frame(lapply(df[headArray("ID", "ihh_race", df)], function(x) as.factor(x)))
 df[headArray("age", "cgnq24b_4_score", df)] <- data.frame(lapply(df[headArray("age", "cgnq24b_4_score", df)], function(x) as.numeric(as.character(x))))
 
+# fix ksoq varialbes
+
+df$ksoq2[df$ksoq2 == 8] <- NA
+df$ksoq4[df$ksoq4 == 8] <- NA
+df$ksoq6[df$ksoq6 == 8] <- NA
+df[headArray("ksoq1", "ksoq6", df)] <- df[headArray("ksoq1", "ksoq6", df)] - 1
+df[df$sex == "f", headArray("ksoq1", "ksoq6", df)] <- 6 - df[df$sex == "f", headArray("ksoq1", "ksoq6", df)]
+
+describe(df[df$sex == "m", headArray("ksoq1", "ksoq9", df)])
+describe(df[df$sex == "f", headArray("ksoq1", "ksoq9", df)])
+
 # scale scores for each question (seperately by sex)
 
-df.men <- subset(df, sex == "m")
-df.women <- subset(df, sex == "f")
-df.men[(ncol(df) + 1):(ncol(df) + 31) ] <- scale(df.men[headArray("cgnq1_score", "cgnq24b_4_score", df.men)])
-df.women[(ncol(df) + 1):(ncol(df) + 31)] <- scale(df.women[headArray("cgnq1_score", "cgnq24b_4_score", df.men)])
-df <- rbind(df.men,df.women)
-
-rm(df.men, df.women)
-
-# remove raw responses, unscaled scores; calculate  composites
-
-df <- df[-c(headArray("cgnq1_raw", "cgnq24b_4_score", df))]
+df[(ncol(df) + 1):(ncol(df) + 31) ] <- df[headArray("cgnq1_score", "cgnq24b_4_score", df)]
+df <- df %>%
+  group_by(sex) %>%
+  mutate_at(names(df[(ncol(df) - 30):ncol(df)]), scale)
 
 names(df) <- c(names(df[1:(ncol(df) - 31)]), paste("cgnq", 1:23, "_scaled", sep = ""),
                paste("cgnq24a", 1:4, "_scaled", sep = ""), paste("cgnq24b", 1:4, "_scaled", sep = ""))
 
-df$ksoq5recode <- 7 - df$ksoq5
+describe(df[df$sex == "m", headArray("cgnq1_scaled", "cgnq3_scaled", df)])
+describe(df[df$sex == "f", headArray("cgnq1_scaled", "cgnq3_scaled", df)])
+
+##############
+
+# remove raw responses, unscaled scores; calculate  composites
+
+df <- df[-c(headArray("cgnq1_raw", "cgnq24b_4_score", df))] 
+
 df <- df[-c(match("cgnq24a2_scaled", names(df)), match("cgnq24b2_scaled", names(df)))]
 df$cgn_comp <- rowMeans(df[headArray("cgnq1_scaled", "cgnq24b4_scaled", df)], na.rm = TRUE)
-df$so <- rowMeans(df[c("Kinsey_Attr", "Kinsey_Fantasy", "ksoq5recode")], na.rm =TRUE)
+df$so <- rowMeans(df[c("Kinsey_Attr", "Kinsey_Fantasy", "ksoq5")], na.rm =TRUE)
 df$mean_T <- rowMeans(df[c("AM_T","PM_T")], na.rm = TRUE)
 df$all_T <- rowMeans(df[c("mean_T","ihh_T")], na.rm = TRUE)
 
-# this probs isn'tnecessary for you but I need it; turns NaNs in NAs
+# this probs isn't necessary for you but I need it; turns NaNs in NAs
 
 is.nan.data.frame <- function(x) do.call(cbind, lapply(x, is.nan))
 df[is.nan(df)] <- NA
 
 # describe
 
-describe(df$cgn_comp[df$study=="ihh"])
-describe(df$cgn_comp[df$study=="msu"])
+describe(df[df$study=="ihh", c("cgn_comp", "sdi_mean", "all_T", "so",  "soi_behav", "soi_attit", "soi_des")])
+describe(df[df$study=="msu", c("cgn_comp", "all_T", "so", "age")])
 
 # average cgn for each sex
 
 mean(df$cgn_comp[df$sex=="m"], na.rm = TRUE)
 mean(df$cgn_comp[df$sex=="f"], na.rm = TRUE)
-mean(df$all_T[df$sex=="m"], na.rm = TRUE)
+mean(df$all_T[df$sex=="m" & df$study == "msu"], na.rm = TRUE)
 mean(df$all_T[df$sex=="f"], na.rm = TRUE)
 
+################## Race/ethnicity for both
+df$race_combined<- 5 #other
+df$race_combined[df$ihh_race == 5 & df$ihh_ethnicity == "n"] <- 1 #white non hispanic
+df$race_combined[df$ihh_race == 2 & df$ihh_ethnicity == "n"] <- 2 #asian NH
+df$race_combined[df$ihh_race == 3 & df$ihh_ethnicity == "n"] <- 3 #black NH
+df$race_combined[df$ihh_ethnicity == "h"] <- 4
 
-cgnT_ihh <- lm(cgn_comp ~ log(all_T), data = subset(df, study == "ihh" & group != "REL" & sex == "m")); summary(cgnT_ihh); hist(residuals(cgnT_ihh))
+df$race_combined[df$msu_ethnicity == 6] <- 1 #white non hispanic
+df$race_combined[df$msu_ethnicity == 2] <- 2
+df$race_combined[df$msu_ethnicity == 3] <- 3
+df$race_combined[df$msu_ethnicity == 4] <- 4
+
+# calculate SDI mean z scores for men and women
+df <- df %>%
+  group_by(sex) %>%
+  mutate(SDI_Z = scale(sdi_mean))
+
+
+cgnT_ihh <- lm(cgn_comp ~ all_T, data = subset(df, study == "msu" & group != "REL" & sex == "m")); summary(cgnT_ihh); hist(residuals(cgnT_ihh))
 cgnT_msu <- lmer(cgn_comp ~ log(all_T) + (1|sibID), data = subset(df, study == "msu" & sex == "m")); summary(cgnT_msu); hist(residuals(cgnT_msu))
 
 
