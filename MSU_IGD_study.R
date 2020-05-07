@@ -1,4 +1,5 @@
-library(dplyr); library(lmerTest); library(psych)
+library(dplyr); library(lmerTest); library(psych); library(sjPlot); library(sjmisc); library(sjlabelled)
+
 
 # read in data
 
@@ -88,6 +89,7 @@ df <- df %>%
 cgnT_ihh <- lm(cgn_comp ~ all_T, data = subset(df, study == "msu" & group != "REL" & sex == "m")); summary(cgnT_ihh); hist(residuals(cgnT_ihh))
 cgnT_msu <- lmer(cgn_comp ~ log(all_T) + (1|sibID), data = subset(df, study == "msu" & sex == "m")); summary(cgnT_msu); hist(residuals(cgnT_msu))
 
+tab_model(cgnT_msu)
 
 soT_ihh <- lm(ksoq9 ~ log(all_T), data = subset(df, study == "ihh" & group == "CON" & sex == "f")); summary(soT_ihh); hist(residuals(soT_ihh))
 soT_msu <- lmer(cgn_comp ~ all_T + (1|sibID), data = subset(df, study == "msu" & sex == "f")); summary(soT_msu); hist(residuals(soT_msu))
