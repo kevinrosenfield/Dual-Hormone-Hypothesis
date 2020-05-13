@@ -1,11 +1,11 @@
-library(dplyr); library(lmerTest); library(psych); library(sjPlot); library(sjmisc); library(sjlabelled)
+library(dplyr); library(lmerTest); library(psych); library(sjPlot); library(sjmisc); library(sjlabelled); library(ggbiplot)
 
 
 # read in data
 
 df <- as.data.frame(read.csv("df.csv"))
 
-df <- df[which(df$group !="REL" | is.na(df$group)),]
+df <- df[which(df$group =="CON" | is.na(df$group)),]
 df$group<-droplevels(df$group)
 
 # change variable types
@@ -22,9 +22,22 @@ df$ksoq4[df$ksoq4 == 8] <- NA
 df$ksoq6[df$ksoq6 == 8] <- NA
 df[headArray("ksoq1", "ksoq6", df)] <- df[headArray("ksoq1", "ksoq6", df)] - 1
 df[df$sex == "f", headArray("ksoq1", "ksoq6", df)] <- 6 - df[df$sex == "f", headArray("ksoq1", "ksoq6", df)]
+df[df$sex == "f", headArray("ksoq1", "ksoq6", df)] <- 6 - df[df$sex == "f", headArray("ksoq1", "ksoq6", df)]
+df[df$sex == "m", "ksoq8"] <- 6 - df[df$sex == "m", "ksoq8"]
+df[df$sex == "f", "ksoq7"] <- 6 - df[df$sex == "f", "ksoq7"] 
 
 describe(df[df$sex == "m", headArray("ksoq1", "ksoq9", df)])
 describe(df[df$sex == "f", headArray("ksoq1", "ksoq9", df)])
+
+ksoq_pca_m <- prcomp(na.omit(df[df$sex == "m", headArray("ksoq1", "ksoq9", df)]))
+ksoq_pca_f <- prcomp(na.omit(df[df$sex == "f", headArray("ksoq1", "ksoq9", df)]))
+
+library(data.table)
+counts <- setDT(df[study == "ihh" & !is.na (sdi1) & !is.na(ihh_T) & !is.na(ihh_C) & sex == "f"])[, .N, subID]
+count(counts$N[counts$N == 2])
+
+ggbiplot(ksoq_pca_f)
+ggbiplot(ksoq_pca_m)
 
 # scale scores for each question (seperately by sex)
 
@@ -68,6 +81,10 @@ mean(df$cgn_comp[df$sex=="f"], na.rm = TRUE)
 mean(df$all_T[df$sex=="m" & df$study == "msu"], na.rm = TRUE)
 mean(df$all_T[df$sex=="f"], na.rm = TRUE)
 
+# composite SOI psychology scores
+
+df$soi_psych <- rowMeans(df[c("soi_des", "soi_attit")])
+
 ################## Race/ethnicity for both
 df$race_combined<- 5 #other
 df$race_combined[df$ihh_race == 5 & df$ihh_ethnicity == "n"] <- 1 #white non hispanic
@@ -85,23 +102,57 @@ df <- df %>%
   group_by(sex) %>%
   mutate(SDI_Z = scale(sdi_mean))
 
+# RCGN predict current sexual orientation in women?
 
-cgnT_ihh <- lm(cgn_comp ~ all_T, data = subset(df, study == "msu" & group != "REL" & sex == "m")); summary(cgnT_ihh); hist(residuals(cgnT_ihh))
-cgnT_msu <- lmer(cgn_comp ~ log(all_T) + (1|sibID), data = subset(df, study == "msu" & sex == "m")); summary(cgnT_msu); hist(residuals(cgnT_msu))
+soCGN_ihh_f <- lmer(ksoq9 ~ cgn_comp + (1|subID), data = subset(df, study == "ihh" & group == "CON" & sex == "f")); summary(soCGN_ihh_f); hist(residuals(soCGN_ihh_f))
+soCGN_msu_f <- lmer(so ~ cgn_comp + (1|sibID), data = subset(df, study == "msu" & sex == "f")); summary(soCGN_msu_f); hist(residuals(soCGN_msu_f))
 
-tab_model(cgnT_msu)
+# RCGN predict current sexual orientation in men?
 
-soT_ihh <- lm(ksoq9 ~ log(all_T), data = subset(df, study == "ihh" & group == "CON" & sex == "f")); summary(soT_ihh); hist(residuals(soT_ihh))
-soT_msu <- lmer(cgn_comp ~ all_T + (1|sibID), data = subset(df, study == "msu" & sex == "f")); summary(soT_msu); hist(residuals(soT_msu))
+soCGN_ihh_m <- lm(ksoq9 ~ cgn_comp, data = subset(df, study == "ihh" & group == "CON" & sex == "f")); summary(soCGN_ihh_m); hist(residuals(soCGN_ihh_m))
+soCGN_msu_m <- lm(so ~ cgn_comp, data = subset(df, study == "msu" & sex == "f")); summary(soCGN_msu_m); hist(residuals(soCGN_msu_m))
 
-soCGN_ihh <- lm(ksoq9 ~ cgn_comp, data = subset(df, study == "ihh" & group == "CON" & sex == "f")); summary(soCGN_ihh); hist(residuals(soCGN_ihh))
+# Does current T predict RCGN in women?
 
-soCGN_msu <- lm(so ~ cgn_comp, data = subset(df, study == "msu" & sex == "m")); summary(soCGN_msu); hist(residuals(soCGN_msu))
+cgnT_ihh_f <- lm(cgn_comp ~ all_T, data = subset(df, study == "msu" & group != "REL" & sex == "f")); summary(cgnT_ihh_f); hist(residuals(cgnT_ihh_f))
+cgnT_msu_f <- lmer(cgn_comp ~ log(all_T) + (1|sibID), data = subset(df, study == "msu" & sex == "f")); summary(cgnT_msu_f); hist(residuals(cgnT_msu_f))
 
-amt_so <- lm(formula = scale(log(am_t)) ~ so); summary(amt_so)
-pmt_cgn <- lm(formula = scale(log(pm_t)) ~ cgn); summary(pmt_cgn)
-pmt_so <- lm(formula = scale(log(pm_t)) ~ so); summary(pmt_so)
-cgn_so <- lm(formula = cgn ~ so); summary(cgn_so)
+# Does current T predict RCGN in men?
+
+cgnT_ihh_m <- lm(cgn_comp ~ all_T, data = subset(df, study == "msu" & group != "REL" & sex == "m")); summary(cgnT_ihh_m); hist(residuals(cgnT_ihh_m))
+cgnT_msu_m <- lmer(cgn_comp ~ log(all_T) + (1|sibID), data = subset(df, study == "msu" & sex == "m")); summary(cgnT_msu_m); hist(residuals(cgnT_msu_m))
+
+tab_model(cgnT_msu_f)
+
+# Does current T predict current sexual orientation in women?
+
+soT_ihh_f <- lm(ksoq9 ~ log(all_T), data = subset(df, study == "ihh" & group == "CON" & sex == "f")); summary(soT_ihh_f); hist(residuals(soT_ihh_f))
+soT_msu_f <- lmer(cgn_comp ~ all_T + (1|sibID), data = subset(df, study == "msu" & sex == "f")); summary(soT_msu_f); hist(residuals(soT_msu_f))
+
+# Does current T predict current sexual orientation in men?
+
+soT_ihh_m <- lm(ksoq9 ~ log(all_T), data = subset(df, study == "ihh" & group == "CON" & sex == "m")); summary(soT_ihh_m); hist(residuals(soT_ihh_m))
+soT_msu_m <- lmer(cgn_comp ~ all_T + (1|sibID), data = subset(df, study == "msu" & sex == "m")); summary(soT_msu_m); hist(residuals(soT_msu_m))
+
+# Does current T predict current sexual desire in women?
+
+sdiT_ihh_f <- lm(sdi_mean ~ log(all_T), data = subset(df, study == "ihh" & group == "CON" & sex == "f")); summary(sdiT_ihh_f); hist(residuals(sdiT_ihh_f))
+
+# Does current T predict current sexual desire in men?
+
+sdiT_ihh_m <- lm(sdi_sol ~ sdi_dyad, data = subset(df, study == "ihh" & group == "CON" & sex == "m")); summary(sdiT_ihh_m); hist(residuals(sdiT_ihh_m))
+
+# Does current T predict current interest in casual sex in women?
+
+soibT_ihh_f <- lm(soi_behav ~ log(all_T), data = subset(df, study == "ihh" & group == "CON" & sex == "f")); summary(soibT_ihh_f); hist(residuals(soibT_ihh_f))
+soidT_ihh_f <- lm(log(all_T) ~ soi_psych, data = subset(df, study == "ihh" & group == "CON" & sex == "f")); summary(soidT_ihh_f); hist(residuals(soidT_ihh_f))
+soiaT_ihh_f <- lm(soi_attit ~ log(all_T), data = subset(df, study == "ihh" & group == "CON" & sex == "f")); summary(soiaT_ihh_f); hist(residuals(soiaT_ihh_f))
+
+# Does current T predict current sexual casual sex in men?
+
+soibT_ihh_m <- lm(log(all_T) ~ soi_behav + soi_psych , data = subset(df, study == "ihh" & group == "CON" & sex == "m")); summary(soibT_ihh_m); hist(residuals(soibT_ihh_m))
+soidT_ihh_m <- lm(soi_des ~ log(all_T), data = subset(df, study == "ihh" & group == "CON" & sex == "m")); summary(soidT_ihh_m); hist(residuals(soidT_ihh_m))
+soiaT_ihh_m <- lm(soi_attit ~ log(all_T), data = subset(df, study == "ihh" & group == "CON" & sex == "m")); summary(soiaT_ihh_m); hist(residuals(soiaT_ihh_m))
 
 scatter.smooth(scale(log(am_t)),cgn)
 
