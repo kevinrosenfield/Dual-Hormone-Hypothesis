@@ -1,5 +1,10 @@
-library(dplyr); library(lmerTest); library(psych); library(sjPlot); library(sjmisc); library(sjlabelled); library(ggbiplot)
+library(pacman); pacman::p_load(tidyverse, dplyr, lmerTest, psych, sjPlot, sjmisc, sjlabelled, data.table, reshape2, ggcorrplot, stargazer, gridExtra)
 
+###############################################################################################################################
+################################################                               ################################################
+################################################        DATA PREPERATION       ################################################
+################################################                               ################################################
+###############################################################################################################################
 
 # read in data
 
@@ -7,6 +12,7 @@ df <- as.data.frame(read.csv("df.csv"))
 
 df <- df[which(df$group =="CON" | is.na(df$group)),]
 df$group<-droplevels(df$group)
+df$session[is.na(df$session)] <- 1
 
 # change variable types
 
@@ -26,19 +32,6 @@ df[df$sex == "f", headArray("ksoq1", "ksoq6", df)] <- 6 - df[df$sex == "f", head
 df[df$sex == "m", "ksoq8"] <- 6 - df[df$sex == "m", "ksoq8"]
 df[df$sex == "f", "ksoq7"] <- 6 - df[df$sex == "f", "ksoq7"] 
 
-describe(df[df$sex == "m", headArray("ksoq1", "ksoq9", df)])
-describe(df[df$sex == "f", headArray("ksoq1", "ksoq9", df)])
-
-ksoq_pca_m <- prcomp(na.omit(df[df$sex == "m", headArray("ksoq1", "ksoq9", df)]))
-ksoq_pca_f <- prcomp(na.omit(df[df$sex == "f", headArray("ksoq1", "ksoq9", df)]))
-
-library(data.table)
-counts <- setDT(df[study == "ihh" & !is.na (sdi1) & !is.na(ihh_T) & !is.na(ihh_C) & sex == "f"])[, .N, subID]
-count(counts$N[counts$N == 2])
-
-ggbiplot(ksoq_pca_f)
-ggbiplot(ksoq_pca_m)
-
 # scale scores for each question (seperately by sex)
 
 df[(ncol(df) + 1):(ncol(df) + 31) ] <- df[headArray("cgnq1_score", "cgnq24b_4_score", df)]
@@ -48,11 +41,6 @@ df <- df %>%
 
 names(df) <- c(names(df[1:(ncol(df) - 31)]), paste("cgnq", 1:23, "_scaled", sep = ""),
                paste("cgnq24a", 1:4, "_scaled", sep = ""), paste("cgnq24b", 1:4, "_scaled", sep = ""))
-
-describe(df[df$sex == "m", headArray("cgnq1_scaled", "cgnq3_scaled", df)])
-describe(df[df$sex == "f", headArray("cgnq1_scaled", "cgnq3_scaled", df)])
-
-##############
 
 # remove raw responses, unscaled scores; calculate  composites
 
@@ -69,21 +57,10 @@ df$all_T <- rowMeans(df[c("mean_T","ihh_T")], na.rm = TRUE)
 is.nan.data.frame <- function(x) do.call(cbind, lapply(x, is.nan))
 df[is.nan(df)] <- NA
 
-# describe
-
-describe(df[df$study=="ihh", c("cgn_comp", "sdi_mean", "all_T", "so",  "soi_behav", "soi_attit", "soi_des")])
-describe(df[df$study=="msu", c("cgn_comp", "all_T", "so", "age")])
-
-# average cgn for each sex
-
-mean(df$cgn_comp[df$sex=="m"], na.rm = TRUE)
-mean(df$cgn_comp[df$sex=="f"], na.rm = TRUE)
-mean(df$all_T[df$sex=="m" & df$study == "msu"], na.rm = TRUE)
-mean(df$all_T[df$sex=="f"], na.rm = TRUE)
-
 # composite SOI psychology scores
 
-df$soi_psych <- rowMeans(df[c("soi_des", "soi_attit")])
+df$soi_psych <- rowMeans(df[c("soi_des", "soi_attit")], na.rm = TRUE)
+df$soi_mean <- rowMeans(df[c("soit1", "soit9")], na.rm = TRUE)
 
 ################## Race/ethnicity for both
 df$race_combined<- 5 #other
@@ -97,10 +74,290 @@ df$race_combined[df$msu_ethnicity == 2] <- 2
 df$race_combined[df$msu_ethnicity == 3] <- 3
 df$race_combined[df$msu_ethnicity == 4] <- 4
 
-# calculate SDI mean z scores for men and women
+# calculate mean SDI z scores for men and women
 df <- df %>%
   group_by(sex) %>%
-  mutate(SDI_Z = scale(sdi_mean))
+  mutate(sdi_mean.z = scale(sdi_mean))
+
+df <- df %>%
+  group_by(subID) %>%
+  mutate(ihh_C.cm = mean(ihh_C, na.rm =TRUE),
+         ihh_T.cm = mean(ihh_T, na.rm =TRUE),
+         sdi_mean.cm = mean(sdi_mean, na.rm = TRUE),
+         sdi_sol.cm = mean(sdi_sol, na.rm = TRUE),
+         sdi_dyad.cm = mean(sdi_dyad, na.rm = TRUE),
+         soi_mean.cm = mean(soi_mean, na.rm = TRUE),
+         sdi_des.cm = mean(soi_des, na.rm = TRUE),
+         sdi_attit.cm = mean(soi_attit, na.rm = TRUE),
+         sdi_behav.cm = mean(soi_behav, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(ihh_C.cwc = ihh_C - ihh_C.cm,
+         ihh_T.cwc = ihh_T - ihh_T.cm,
+         ihh_T.ccm = ihh_T.cm - mean(ihh_T.cm, na.rm = TRUE),
+         ihh_C.ccm = ihh_C.cm - mean(ihh_C.cm, na.rm = TRUE))
+
+df[is.nan(df)] <- NA
+
+
+###############################################################################################################################
+################################################                               ################################################
+################################################     DESCRIPTIVE STATISTICS    ################################################
+################################################                               ################################################
+###############################################################################################################################
+
+df[df$study == "ihh",] %>%
+  group_by(sex, n_sessions) %>%
+  summarise(
+    n = n()
+  )
+
+samples <- df %>%
+  pivot_wider(names_from = session,
+              values_from = colnames(df[12:length(colnames(df))])) %>%
+  filter(study == "ihh")
+
+samples %>%
+  filter((!is.na(sdi_mean_1) & !is.na(ihh_T_1) & !is.na(ihh_C_1) & (is.na(sdi_mean_2) | is.na(ihh_T_2) | is.na(ihh_C_2))) |
+           ((is.na(sdi_mean_1) | is.na(ihh_T_1) | is.na(ihh_C_1)) & !is.na(sdi_mean_2) & !is.na(ihh_T_2) & !is.na(ihh_C_2))) %>%
+  group_by(sex) %>%
+  summarize(n()) %>%
+  rename(sdi_b = `n()`) %>%
+  bind_cols(samples %>%
+          filter(!is.na(sdi_mean_1) & !is.na(ihh_T_1) & !is.na(ihh_C_1)) %>%
+          filter(!is.na(sdi_mean_2) & !is.na(ihh_T_2) & !is.na(ihh_C_2)) %>%
+          group_by(sex) %>%
+          summarize(n()) %>%
+          select(-sex) %>%
+            rename(sdi_w = `n()`)) %>%
+  bind_cols(samples %>%
+              filter((!is.na(soi_mean_1) & !is.na(ihh_T_1) & !is.na(ihh_C_1) & (is.na(soi_mean_2) | is.na(ihh_T_2) | is.na(ihh_C_2))) |
+                       ((is.na(soi_mean_1) | is.na(ihh_T_1) | is.na(ihh_C_1)) & !is.na(soi_mean_2) & !is.na(ihh_T_2) & !is.na(ihh_C_2))) %>%
+              group_by(sex) %>%
+              summarize(n()) %>%
+              rename(soi_b = `n()`)) %>%
+              bind_cols(samples %>%
+                          filter(!is.na(soi_mean_1) & !is.na(ihh_T_1) & !is.na(ihh_C_1)) %>%
+                          filter(!is.na(soi_mean_2) & !is.na(ihh_T_2) & !is.na(ihh_C_2)) %>%
+                          group_by(sex) %>%
+                          summarize(n()) %>%
+                          select(-sex)) %>%
+  select(-sex1)
+
+df %>%
+  group_by(subID) %>%
+  summarise(
+    sessions = n_distinct(session)
+  ) %>%
+  group_by(sessions) %>%
+  summarise(
+    n = n()
+  )
+
+df %>%
+  filter(sex == "m", study =="ihh") %>%
+  group_by(subID) %>%
+  select(cgn_comp, sdi_mean, ihh_T, so, soi_mean, age) %>%
+  summarise_all(funs(mean)) %>%
+  describe
+
+df %>%
+  filter(sex == "f", study =="ihh") %>%
+  group_by(subID) %>%
+  select(cgn_comp, sdi_mean, ihh_T, so, soi_mean, age) %>%
+  summarise_all(funs(mean)) %>%
+  describe
+
+
+describe(df[df$sex == "m", headArray("ksoq1", "ksoq9", df)])
+describe(df[df$sex == "f", headArray("ksoq1", "ksoq9", df)])
+
+ksoq_pca_m <- prcomp(na.omit(df[df$sex == "m", headArray("ksoq1", "ksoq9", df)]))
+ksoq_pca_f <- prcomp(na.omit(df[df$sex == "f", headArray("ksoq1", "ksoq9", df)]))
+
+ggbiplot(ksoq_pca_f)
+ggbiplot(ksoq_pca_m)
+
+detach(package:ggbiplot); detach(package:plyr)
+
+describe(df[df$study=="ihh", c("cgn_comp", "sdi_mean", "all_T", "so",  "soi_behav", "soi_attit", "soi_des", "age")])
+describe(df[df$study=="msu", c("cgn_comp", "all_T", "so", "age")])
+
+mean(df$cgn_comp[df$sex=="m"], na.rm = TRUE)
+mean(df$cgn_comp[df$sex=="f"], na.rm = TRUE)
+mean(df$all_T[df$sex=="m" & df$study == "msu"], na.rm = TRUE)
+mean(df$all_T[df$sex=="f"], na.rm = TRUE)
+
+describe(df[df$sex == "m", headArray("cgnq1_scaled", "cgnq3_scaled", df)])
+describe(df[df$sex == "f", headArray("cgnq1_scaled", "cgnq3_scaled", df)])
+
+df.m <- df %>% filter(sex == "m", study == "ihh")
+df.f <- df %>% filter(sex == "f", study == "ihh")
+
+pairs.panels(
+  df.m %>% select(sdi_mean, sdi_sol, sdi_dyad), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.9, ellipses = FALSE)
+  
+pairs.panels(
+  df.f %>% select(sdi_mean, sdi_sol, sdi_dyad), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.9, ellipses = FALSE)
+  
+pairs.panels(
+  df.m %>% select(soi_mean, soi_attit, soi_behav, soi_des), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.9, ellipses = FALSE)
+
+pairs.panels(
+  df.f %>% select(soi_mean, soi_attit, soi_behav, soi_des), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.9, ellipses = FALSE)
+
+###############################################################################################################################
+##############################################                                     ############################################
+##############################################    DUAL-HORMONE HYPOTHESIS TESTS    ############################################
+##############################################                                     ############################################
+###############################################################################################################################
+
+
+### HORMONES UNCENTERED: Within- and between-individual effects ARE NOT isolated
+
+# men
+
+m.d <- lmer(sdi_mean ~ ihh_T*ihh_C + (1 | subID), data = df.m) # sdi-2
+
+m.sol <- lmer(sdi_sol ~ ihh_T*ihh_C + (1 | subID), data = df.m) # sdi-2[solitary]
+
+m.dyad <- lmer(sdi_dyad ~ ihh_T*ihh_C + (1 | subID), data = df.m) # sdi-2[dyadic]
+
+m.s <- lmer(soi_mean ~ ihh_T*ihh_C + (1 | subID), data = df.m) # soiR
+
+m.att <- lmer(soi_attit ~ ihh_T*ihh_C + (1 | subID), data = df.m) # soi-R[attitude]
+
+m.beh <- lmer(soi_behav ~ ihh_T*ihh_C + (1 | subID), data = df.m) # soi-R[behavior]
+
+m.des <- lmer(soi_des ~ ihh_T*ihh_C + (1 | subID), data = df.m) # soi-R[desire]
+
+# women
+
+w.d <- lmer(sdi_mean ~ ihh_T*ihh_C + (1 | subID), data = df.f) # sdi-2
+
+w.sol <- lmer(sdi_sol ~ ihh_T*ihh_C + (1 | subID), data = df.f) # sdi-2[solitary]
+
+w.dyad <- lmer(sdi_dyad ~ ihh_T*ihh_C + (1 | subID), data = df.f) # sdi-2[dyadic]
+
+w.s <- lmer(soi_mean ~ ihh_T*ihh_C + (1 | subID), data = df.f) # soiR
+
+w.att <- lmer(soi_attit ~ ihh_T*ihh_C + (1 | subID), data = df.f) # soi-R[attitude]
+
+w.beh <- lmer(soi_behav ~ ihh_T*ihh_C + (1 | subID), data = df.f) # soi-R[behavior]
+
+w.des <- lmer(soi_des ~ ihh_T*ihh_C + (1 | subID), data = df.f) # soi-R[desire]
+
+
+### HORMONES ARE CENTERED: Within(cwc)- and between(cm)-individual effects ARE isolated
+
+# men
+
+m.d_w <- lmer(sdi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.m) # sdi-2
+
+m.sol_w <- lmer(sdi_sol ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.m) # sdi-2[solitary]
+
+m.dyad_w <- lmer(sdi_dyad ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.m) # sdi-2[dyadic]
+
+m.s_w <- lmer(soi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.m) # soiR
+
+m.att_w <- lmer(soi_attit ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.m) # soi-R[attitude]
+
+m.beh_w <- lmer(soi_behav ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.m) # soi-R[behavior]
+
+m.des_w <- lmer(soi_des ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.m) # soi-R[desire]
+
+# women
+
+w.d_w <- lmer(sdi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.f) # sdi-2
+
+w.sol_w <- lmer(sdi_sol ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.f) # sdi-2[solitary]
+
+w.dyad_w <- lmer(sdi_dyad ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.f) # sdi-2[dyadic]
+
+w.s_w <- lmer(soi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.f) # soiR
+
+w.att_w <- lmer(soi_attit ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.f) # soi-R[attitude]
+
+w.beh_w <- lmer(soi_behav ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.f) # soi-R[behavior]
+
+w.des_w <- lmer(soi_des ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df.f) # soi-R[desire]
+
+# Have to do this to use stargazer
+
+class(w.d) <- "lmerMod"
+class(w.sol) <- "lmerMod"
+class(w.dyad) <- "lmerMod"
+class(w.s) <- "lmerMod"
+class(w.att) <- "lmerMod"
+class(w.beh) <- "lmerMod"
+class(w.des) <- "lmerMod"
+
+class(m.d) <- "lmerMod"
+class(m.sol) <- "lmerMod"
+class(m.dyad) <- "lmerMod"
+class(m.s) <- "lmerMod"
+class(m.att) <- "lmerMod"
+class(m.beh) <- "lmerMod"
+class(m.des) <- "lmerMod"
+
+class(w.d_w) <- "lmerMod"
+class(w.sol_w) <- "lmerMod"
+class(w.dyad_w) <- "lmerMod"
+class(w.s_w) <- "lmerMod"
+class(w.att_w) <- "lmerMod"
+class(w.beh_w) <- "lmerMod"
+class(w.des_w) <- "lmerMod"
+
+class(m.d_w) <- "lmerMod"
+class(m.sol_w) <- "lmerMod"
+class(m.dyad_w) <- "lmerMod"
+class(m.s_w) <- "lmerMod"
+class(m.att_w) <- "lmerMod"
+class(m.beh_w) <- "lmerMod"
+class(m.des_w) <- "lmerMod"
+
+# FOR BETWEEN SUBJECT MODELS, WOMEN
+stargazer(w.d, w.sol, w.dyad, w.s, w.att, w.beh, w.des, single.row = F, align = F, intercept.bottom = T, no.space = T, 
+          dep.var.caption = "", type = "text", out = "women_between.html", report = "vc*p", 
+          star.char = c("*", "**"), digits = 3, star.cutoffs = c(0.05, 0.01), 
+          notes = "*p<0.05;**p<0.01", notes.append = F,
+          column.labels = c("Total desire", "Solitary desire", "Dyadic Desire", "Uncommited Sex Total",
+                            "Uncommited Sex Attitude", "Uncommited Sex Behavior", "Uncommited Sex Desire" ), omit.stat = "all")
+
+# FOR BETWEEN SUBJECT MODELS, MEN
+stargazer(m.d, m.sol, m.dyad, m.s, m.att, m.beh, m.des, single.row = F, align = F, intercept.bottom = T, no.space = T, 
+          dep.var.caption = "", type = "text", out = "men_between.html", report = "vc*p", 
+          star.char = c("*", "**"), digits = 3, star.cutoffs = c(0.05, 0.01), 
+          notes = "*p<0.05;**p<0.01", notes.append = F,
+          column.labels = c("Total desire", "Solitary desire", "Dyadic Desire", "Uncommited Sex Total",
+                            "Uncommited Sex Attitude", "Uncommited Sex Behavior", "Uncommited Sex Desire" ), omit.stat = "all")
+
+# FOR WITHIN SUBJECT MODELS, WOMEN
+stargazer(w.d_w, w.sol_w, w.dyad_w, w.s_w, w.att_w, w.beh_w, w.des_w, single.row = F, align = F, intercept.bottom = T, no.space = T, 
+          dep.var.caption = "", type = "text", out = "women_within.html", report = "vc*p", 
+          star.char = c("*", "**"), digits = 3, star.cutoffs = c(0.05, 0.01), 
+          notes = "*p<0.05;**p<0.01", notes.append = F,
+          column.labels = c("Total desire", "Solitary desire", "Dyadic Desire", "Uncommited Sex Total",
+                            "Uncommited Sex Attitude", "Uncommited Sex Behavior", "Uncommited Sex Desire" ), omit.stat = "all")
+
+# FOR WITHIN SUBJECT MODELS, MEN
+stargazer(m.d_w, m.sol_w, m.dyad_w, m.s_w, m.att_w, m.beh_w, m.des_w, single.row = F, align = F, intercept.bottom = T, no.space = T, 
+          dep.var.caption = "", type = "text", out = "men_within.html", report = "vc*p", 
+          star.char = c("*", "**"), digits = 3, star.cutoffs = c(0.05, 0.01), 
+          notes = "*p<0.05;**p<0.01", notes.append = F,
+          column.labels = c("Total desire", "Solitary desire", "Dyadic Desire", "Uncommited Sex Total",
+                            "Uncommited Sex Attitude", "Uncommited Sex Behavior", "Uncommited Sex Desire" ), omit.stat = "all")
+
+
+
+
+
+
+
+
+
+
+
+
 
 # RCGN predict current sexual orientation in women?
 
@@ -153,110 +410,3 @@ soiaT_ihh_f <- lm(soi_attit ~ log(all_T), data = subset(df, study == "ihh" & gro
 soibT_ihh_m <- lm(log(all_T) ~ soi_behav + soi_psych , data = subset(df, study == "ihh" & group == "CON" & sex == "m")); summary(soibT_ihh_m); hist(residuals(soibT_ihh_m))
 soidT_ihh_m <- lm(soi_des ~ log(all_T), data = subset(df, study == "ihh" & group == "CON" & sex == "m")); summary(soidT_ihh_m); hist(residuals(soidT_ihh_m))
 soiaT_ihh_m <- lm(soi_attit ~ log(all_T), data = subset(df, study == "ihh" & group == "CON" & sex == "m")); summary(soiaT_ihh_m); hist(residuals(soiaT_ihh_m))
-
-scatter.smooth(scale(log(am_t)),cgn)
-
-hist(MSUMEN_AMT, breaks = 20, freq = FALSE)
-cor.test(MSUMEN_AMT,MSUMEN_CGNQ, method="spearman")
-shapiro.test(MSUMEN_AMT)
-qqnorm(MSUMEN_AMT)
-hist(MSUMEN_AMT, breaks = 20, freq = TRUE)
-kurtosis(MSUMEN_AMT_RAW)
-cor.test(MSUMEN_AMT_RAW,MSUMEN_CGNQ, method="spearman")
-shapiro.test(MSUMEN_AMT_RAW)
-qqnorm(MSUMEN_AMT_RAW)
-hist(MSUMEN_AMT_RAW, breaks = 20, freq = TRUE)
-scatter.smooth(MSUMEN_AMT_RAW,MSUMEN_PMT_RAW)
-scatter(MSUMEN_AMT,MSUMEN_PMT)
-hist(MSUMEN_CGNQ, breaks = 20, freq = TRUE)
-mean(MSUMEN_CGNQ)
-mean(MSUDATA$average_24_cgnq)
-cor.test(MSUMEN_AMT, MSUMEN_CGNQ)
-rma(-0.1579)
-plot(MSUMEN_AMT,MSUMEN_CGNQ, cex=1.3, pch=19, col="brown2", main = "Testosterone plotted against CGN", xlab="Testosterone (logged and standardized)", ylab="CGN composite score", bty="n", xlim=c(-3,3), ylim=c(-1.5,1))
-lineMSU <- lm(MSUMEN_AMT ~ MSUMEN_CGNQ)
-abline(lineMSU, col="brown2", lwd=3)
-par(new=T)
-#
-#
-#
-#
-MSUDATA<- as.data.frame(read.csv("~/Documents/Penn State/CHH/MSU/MSUCSV.csv"))
-MSUMEN<- MSUDATA[(1:191),]
-# MSUMEN<- MSUMEN[-c(81, 108, 125, 126, 127),]
-#127 has CGNQ 5 SD lower than mean; 108, 125, 126 have AM way higher than PMtest; 81 possible blood contamination
-MSUMEN_CGNQ <- as.numeric(as.character((MSUMEN[,9])))
-MSUMEN_AMT_RAW <- as.numeric(as.character((MSUMEN[,10])))
-MSUMEN_PMT_RAW <- as.numeric(as.character((MSUMEN[,11])))
-MSUMEN_AMT <- as.numeric(as.character((MSUMEN[,14])))
-MSUMEN_PMT <- as.numeric(as.character((MSUMEN[,15])))
-MSUMEN_ORIENT <- as.numeric(as.character((MSUMEN[,16])))
-MSUMEN_VAR <- data.frame(MSUMEN_CGNQ, MSUMEN_AMT, MSUMEN_AMT_RAW, MSUMEN_PMT, MSUMEN_PMT_RAW, MSUMEN_ORIENT)
-colnames(MSUMEN_VAR) <- c("CGNQ", "AMTEST", "AMTESTRAW", "PMTEST", "PMTESTRAW", "ORIENT")
-MSUMEN_VAR
-MSUMEN_AMTxCGNQ <- lm(formula = AMTEST ~ CGNQ, data = MSUMEN_VAR)
-MSUMEN_AMTxORIENT <- lm(formula = AMTEST ~ ORIENT, data = MSUMEN_VAR)
-MSUMEN_PMTxCGNQ <- lm(formula = PMTEST ~ CGNQ, data = MSUMEN_VAR)
-MSUMEN_PMTxORIENT <- lm(formula = PMTEST ~ ORIENT, data = MSUMEN_VAR)
-MSUMEN_AMTxCGNQxORIENT <- lm(CGNQ ~ MSUMEN_AMT + ORIENT, data = MSUMEN_VAR)
-summary(MSUMEN_AMTxCGNQ)
-summary(MSUMEN_AMTxORIENT)
-summary(MSUMEN_CGNQxORIENT)
-summary(MSUMEN_PMTxCGNQ)
-summary(MSUMEN_PMTxORIENT)
-summary(MSUMEN_AMTxCGNQxORIENT)
-scatter.smooth(MSUMEN_AMT,MSUMEN_CGNQ)
-hist(MSUMEN_AMT, breaks = 20, freq = FALSE)
-cor.test(MSUMEN_AMT,MSUMEN_CGNQ, method="spearman")
-shapiro.test(MSUMEN_AMT)
-qqnorm(MSUMEN_AMT)
-hist(MSUMEN_AMT, breaks = 20, freq = TRUE)
-kurtosis(MSUMEN_AMT_RAW)
-cor.test(MSUMEN_AMT_RAW,MSUMEN_CGNQ, method="spearman")
-shapiro.test(MSUMEN_AMT_RAW)
-qqnorm(MSUMEN_AMT_RAW)
-hist(MSUMEN_AMT_RAW, breaks = 20, freq = TRUE)
-scatter.smooth(MSUMEN_AMT_RAW,MSUMEN_PMT_RAW)
-scatter(MSUMEN_AMT,MSUMEN_PMT)
-hist(MSUMEN_CGNQ, breaks = 20, freq = TRUE)
-mean(MSUMEN_CGNQ)
-mean(MSUDATA$average_24_cgnq)
-cor.test(MSUMEN_AMT, MSUMEN_CGNQ)
-rma(-0.1579)
-plot(MSUMEN_AMT,MSUMEN_CGNQ, cex=1.3, pch=19, col="brown2", main = "Testosterone plotted against gender conformity", xlab="Testosterone Z-scores", cex.lab=1.5, ylab="Gender conformity", bty="n", xlim=c(-3,2.6), ylim=c(-1,1), mgp = c(2.3, 1, 0))
-lineMSU <- lm(MSUMEN_AMT ~ MSUMEN_CGNQ)
-abline(lineMSU, col="brown2", lwd=3)
-par(new=T)
-
-ggplot(MSUMEN, aes(x = MSUMEN_AMT, y = MSUMEN_CGNQ)) + 
-  geom_point(color="red", size=3) +
-  stat_smooth(method = "lm", color = "red") + 
-  xlim(-3, 3.2) +
-  ylim(-1, 1) +
-  ggtitle("Testosterone plotted against gender conformity", subtitle = NULL) +
-  theme(plot.title = element_text(face="bold", size=18, hjust=.4)) +
-  xlab("Testosterone Z-scores") +
-  ylab("Gender conformity") +
-  theme(axis.text=element_text(size=12),
-        axis.title=element_text(size=14,face="bold", vjust=.1)) +
-  theme(axis.line = element_line(colour = "black"),
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        panel.border = element_blank(),
-        panel.background = element_blank())
-par(new=T)
-
-ggplot() + points(MSUMEN_VAR, aes(x = AMTEST, y = CGNQ))
-length(MSUMEN_VAR$CGNQ)
-length(MSUMEN_VAR$AMTEST)
-CHH_FRAME <- data.frame(c(ALL_VAR$CGNQ,0,0), c(ALL_VAR$TEST,0,0))
-ggplot(MSUMEN, aes(x = MSUMEN_AMT, y = MSUMEN_CGNQ)) +
-         geom_point() +
-         geom_point(data = CHH_FRAME, color = "red")
-comp7xT_MSU <- lm(MSUMEN_COMP7 ~ MSUMEN_AMT)
-summary(comp7xT_MSU)
-cor.test(MSUMEN_COMP7, MSUMEN_AMT)
-mean(MSUMEN_CGNQ)
-sd(MSUMEN_CGNQ)
-mean(MSUMEN_AMT)
-sd(MSUMEN_AMT)
