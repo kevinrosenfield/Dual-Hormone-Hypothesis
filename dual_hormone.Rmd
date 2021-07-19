@@ -149,11 +149,9 @@ table.model <- function(model) {
 
 ```
 
-## R Markdown
+## Dual-Hormone Hypothesis Statistical progamming
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
 
 ```{r descriptives setup, include=FALSE}
 
@@ -169,7 +167,7 @@ library(ltm)
 
 ```
 
-
+## 1. Cronbach's alphs
 
 ```{r descriptives, echo=FALSE}
 cronbach.alpha(SOI_R, na.rm = T)
@@ -188,7 +186,7 @@ df %>% filter(sex == "m", session == 1) %>% count()
 
 ```
 
-#### Do values for session 1 hormonal or psychosxual variables differ for subjects who returned for a second session vs those who didn't?
+#### 2. Do values for session 1 hormonal or psychosxual variables differ for subjects who returned for a second session vs those who didn't?
 
 ```{r differences between subjects who attended 1 or 2 sessions, echo=FALSE}
 
@@ -216,7 +214,7 @@ for (i in seq(4,20,2)) {
 
 ```
 
-#### n of subjects who attended 1 or 2 sessions
+#### 3. n of subjects who attended 1 or 2 sessions
 
 ```{r  n of subjects who attended 1 or 2 sessions, echo=FALSE}
 
@@ -286,6 +284,8 @@ table3 <- df.m %>%
 
 ```
 
+## 4. Stats for hormone values
+
 ```{r Table 2 raw hormones, echo=FALSE, echo=FALSE}
 table2Rows = c("T", "C", "P", "E")
 table2Cols = c("n", "Mean", "SD")
@@ -300,6 +300,8 @@ htmlTable(table2[2:5,c(14, 2:4, 14, 16:18, 28, 30:32)],
 
 ```
 
+## 5. Stats for psychosexual scales and subscales
+
 ```{r Table 3 scales and subscales, echo=FALSE}
 table3Rows = c("SOI-R ", "SOI: Attitudes", "SOI: Behavior", "SOI: Desire", "SDI-2", "SDI: Solitary", "SDI: Dyadic")
 table3Cols = c("n", "Mean", "SD")
@@ -313,7 +315,9 @@ htmlTable(round(table3[2:8,c(2:4, 14, 16:18, 28, 30:32)], 2),
           cgroup = c("Men", "", "Women (NC)", "", "Women (HC)"), n.cgroup = c(3, 1, 3, 1, 3))
 ```
 
-```{r Table 4 n of subs with one or two set of T, C, and either SDI or SOI samples, include=FALSE, echo=FALSE}
+## 6. Numbers of subjects with one or two sets of T or C and SDI or SOI samples
+
+```{r Table 4 n of subs with one or two sets of T, C, and either SDI or SOI samples, include=FALSE, echo=FALSE}
 
 table4 <- df %>%
   filter(session == 1) %>%
@@ -354,7 +358,7 @@ ihh.women <- ihh.sex %>% filter(sex == "f")
 
 ```
 
-##### p-values for women vs. men survey and hormone values
+##### 7. p-values for women vs. men survey and hormone values
 
 ```{r group differences stats sex, echo=FALSE}
 for (i in 4:12){
@@ -379,6 +383,7 @@ remove(ihh.women)
 
 ## Plots
 
+### 8. Men - SDI and subscales, SOI and subscales, and combined
 ```{r pairs panels plots, echo=FALSE}
 # Supplementary Figures 1-4 : Correlations of scales and their subscales; each scale/sex combination presented separately
 
@@ -386,46 +391,29 @@ pairs.panels(
   df.m %>% dplyr::select(sdi_mean, sdi_sol, sdi_dyad), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.3, cex.cor = 1, ellipses = FALSE)
 
 pairs.panels(
-  df.f %>% dplyr::select(sdi_mean, sdi_sol, sdi_dyad), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.3, cex.cor = 1, ellipses = FALSE)
-
-pairs.panels(
   df.m %>% dplyr::select(soi_mean, soi_attit, soi_behav, soi_des), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.3, cex.cor = 1, ellipses = FALSE)
-
-pairs.panels(
-  df.f %>% dplyr::select(soi_mean, soi_attit, soi_behav, soi_des), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.3, cex.cor = 1, ellipses = FALSE)
-
-# Supplementary Figures 5-6: Correlations of ALL scales and subscales, seperately by sex
 
 pairs.panels(
   df.m %>% dplyr::select(soi_mean, soi_attit, soi_behav, soi_des, sdi_mean, sdi_sol, sdi_dyad), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1, cex.cor = 1, ellipses = FALSE)
 
+```
+
+### Women - SDI and subscales, SOI and subscales, and combined
+
+```{r women pairs panels, echo=FALSE}
+
+pairs.panels(
+  df.f %>% dplyr::select(sdi_mean, sdi_sol, sdi_dyad), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.3, cex.cor = 1, ellipses = FALSE)
+
+pairs.panels(
+  df.f %>% dplyr::select(soi_mean, soi_attit, soi_behav, soi_des), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.3, cex.cor = 1, ellipses = FALSE)
+
 pairs.panels(
   df.f %>% dplyr::select(soi_mean, soi_attit, soi_behav, soi_des, sdi_mean, sdi_sol, sdi_dyad), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1, cex.cor = , ellipses = FALSE)
 
-# Supplementary Figure 7: Log-transformed raw hormone data plots; data for both sexes
-
-par(mfrow=c(2,2))
-
-plot(df.log$ihh_C.log[!is.na(df.log$ihh_C.log)], ylab = "Log Cortisol")
-plot(df.log$ihh_T.log[!is.na(df.log$ihh_T.log)], ylab = "Log Testosterone")
-plot(df.log$ihh_P.log[!is.na(df.log$ihh_P.log)], ylab = "Log Progesterone")
-plot(df.log$ihh_E.log[!is.na(df.log$ihh_E.log)], ylab = "Log Estradiol")
-
-# Supplementary Figure 8: Log-transformed hormone data: Each point is a subject mean, global-mean centered on zero, scaled (to sd = 1) within sex; data for both sexes
-
-plot(df.log$ihh_C.log.cm[!is.na(df.log$ihh_C.log.cm)], ylab = "Log Cortisol")
-plot(df.log$ihh_T.log.cm[!is.na(df.log$ihh_T.log.cm)], ylab = "Log Testosterone")
-plot(df.log$ihh_P.log.cm[!is.na(df.log$ihh_P.log.cm)], ylab = "Log Progesterone")
-plot(df.log$ihh_E.log.cm[!is.na(df.log$ihh_E.log.cm)], ylab = "Log Estradiol")
-
-# Supplementary Figure 9: Log-transformed hormone data: Each point is a session, subject-mean centered on zero, scaled (to sd = 1) w/in sex; data for both sexes
-
-plot(df.log$ihh_C.log.cwc[!is.na(df.log$ihh_C.log.cwc)], ylab = "Log Cortisol")
-plot(df.log$ihh_T.log.cwc[!is.na(df.log$ihh_T.log.cwc)], ylab = "Log Testosterone")
-plot(df.log$ihh_P.log.cwc[!is.na(df.log$ihh_P.log.cwc)], ylab = "Log Progesterone")
-plot(df.log$ihh_E.log.cwc[!is.na(df.log$ihh_E.log.cwc)], ylab = "Log Estradiol")
-
 ```
+
+### 9. Main text figure 1 - sexual desire ~ testosterone grouped by cortisol level
 
 ```{r Main text figure 1 setup, include=FALSE}
 
@@ -473,6 +461,6 @@ men_plot <- ggplot(men, aes(ihh_T.cwc, sdi_sol, col = quantiles_men)) +
 
 ```
 
-```{r main text figure 1testosterone and sexual desire grouped by cortisol level, echo=FALSE}
+```{r main text figure 1 testosterone and sexual desire grouped by cortisol level, echo=FALSE}
 grid.arrange(women_plot, men_plot, nrow = 1)
 ```
