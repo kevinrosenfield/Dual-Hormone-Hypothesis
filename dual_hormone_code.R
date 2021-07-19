@@ -148,7 +148,7 @@ table.model <- function(model) {
 
 # inter-item reliability tests (cronbach's alpha for SOI and SDI questions)
 
-df_sdi <- df %>%
+df_soi <- df %>%
   dplyr::select(soit1:soit9)
 
 df_sdi <- df %>%
@@ -184,12 +184,12 @@ for (i in seq(4,20,2)) {
 
 # n of subjects who attended 1 or 2 sessions
 
-df %>% filter(sex == "f", n_sessions == 1) %>% count()
-df %>% filter(sex == "m", n_sessions == 1) %>% count()
+df %>% filter(sex == "f", n_sessions == 1) %>% count() %>% as.data.frame() %>% paste("Women")
+df %>% filter(sex == "m", n_sessions == 1) %>% count() %>% as.data.frame() %>% paste("Men")
 
 
-df %>% filter(sex == "f", n_sessions == 2) %>% count()/2
-df %>% filter(sex == "m", n_sessions == 2) %>% count()/2
+df %>% filter(sex == "f", n_sessions == 2) %>% filter(session == 1) %>% count() %>% as.data.frame() %>% paste("Women")
+df %>% filter(sex == "m", n_sessions == 2) %>% filter(session == 1) %>% count() %>% as.data.frame() %>% paste("Men")
 
 # Table 1 - age, total n, and n of subs with at least one set of T, C, and either SDI or SOI samples
 
@@ -269,7 +269,7 @@ htmlTable(table4[2:5,c(14, 2:4, 14, 16:18, 28, 30:32)],
           col.rgroup = c("none", "#F7F7F7"),
           cgroup = c("", "Men", "", "Women (HC)", "", "Women (NC)"), n.cgroup = c(1, 3, 1, 3, 1, 3))
 
-# ESM Table 1 - n of subs with one or twos set of T, C, and either SDI or SOI samples
+# ESM Table 4 - n of subs with one or two sets of T, C, and either SDI or SOI samples
 
 df %>%
   filter(session == 1) %>%
