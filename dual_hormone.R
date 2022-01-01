@@ -1,0 +1,1203 @@
+library(pacman); pacman::p_load(lmerTest, psych, sjPlot, sjmisc, sjlabelled,
+                                data.table, reshape2, ggcorrplot, stargazer, gridExtra, htmlTable, tidyverse, schoolmath, ggpubr,lm.beta)
+
+###############################################################################################################################
+################################################                               ################################################
+################################################        DATA PREPERATION       ################################################
+################################################                               ################################################
+###############################################################################################################################
+
+lapply(c("tidyverse", "dplyr", "lmerTest", "psych", "sjPlot", "sjmisc", "sjlabelled",
+         "data.table", "reshape2", "ggcorrplot", "stargazer", "gridExtra", "htmlTable", "simr"), FUN = citation)
+
+# read in data
+
+df <- as.data.frame(read.csv("DHH_df.csv"))
+df$ihh_race[df$ihh_ethnicity == 'h'] = 6
+
+# change variable types
+
+df <- df %>%
+  filter(study == "ihh", !is.na(ihh_C) | !is.na(ihh_T)) %>%
+  dplyr::select(-c(study, msu_ethnicity, AM_T, PM_T, Kinsey_Attr:cgnq24b4_score)) %>%
+  mutate_at(vars(ID:IUD), as.factor) %>%
+  mutate_at(vars(age:sdi_mean), as.character) %>%
+  mutate_at(vars(age:sdi_mean), as.numeric)
+
+df$time <-  as.numeric(as.character(df$time))
+df$Date <-  as.Date(df$Date)
+
+# calculate mean soi and soi psychology scores
+
+df <- df %>%
+  mutate(soi_mean = rowMeans(dplyr::select(., c(soit1:soit9)), na.rm = TRUE),
+         soi_psych = rowMeans(dplyr::select(., c(soi_des, soi_attit)), na.rm = TRUE))
+
+# calculate subject means and subject mean-center hormone variables; center subject-means; scale subject means and subject-centered data within each sex
+
+df <- df %>%
+  group_by(subID) %>%
+  mutate(soi_mean_mean = mean(soi_mean, na.rm =TRUE),
+         soi_attit_mean = mean(soi_attit, na.rm =TRUE),
+         soi_behav_mean = mean(soi_behav, na.rm =TRUE),
+         soi_des_mean = mean(soi_des, na.rm =TRUE),
+         sdi_mean_mean = mean(sdi_mean, na.rm =TRUE),
+         sdi_sol_mean = mean(sdi_sol, na.rm =TRUE),
+         sdi_dyad_mean = mean(sdi_dyad, na.rm =TRUE),
+         ihh_C.cm = mean(ihh_C, na.rm =TRUE),
+         ihh_T.cm = mean(ihh_T, na.rm =TRUE),
+         ihh_P.cm = mean(ihh_P, na.rm =TRUE),
+         ihh_E.cm = mean(ihh_E, na.rm =TRUE),
+         ihh_C.cwc = ihh_C - ihh_C.cm,
+         ihh_T.cwc = ihh_T - ihh_T.cm,
+         ihh_P.cwc = ihh_P - ihh_P.cm,
+         ihh_E.cwc = ihh_E - ihh_E.cm,
+         binary_T = ifelse(ihh_T == min(ihh_T), "low", "high"),
+         binary_C = ifelse(ihh_C == min(ihh_C), "low", "high")) %>%
+  ungroup()
+
+``# log-transformed
+
+df.log <- df %>%
+  group_by(subID) %>%
+  mutate(ihh_C.log = log(ihh_C),
+         ihh_T.log = log(ihh_T),
+         ihh_P.log = log(ihh_P),
+         ihh_E.log = log(ihh_E)) %>%
+  mutate(ihh_C.log.cm = mean(ihh_C.log, na.rm =TRUE),
+         ihh_T.log.cm = mean(ihh_T.log, na.rm =TRUE),
+         ihh_P.log.cm = mean(ihh_P.log, na.rm =TRUE),
+         ihh_E.log.cm = mean(ihh_E.log, na.rm =TRUE),
+         ihh_C.log.cwc = ihh_C.log - mean(ihh_C.log, na.rm =TRUE),
+         ihh_T.log.cwc = ihh_T.log - mean(ihh_T.log, na.rm =TRUE),
+         ihh_P.log.cwc = ihh_P.log - mean(ihh_P.log, na.rm =TRUE),
+         ihh_E.log.cwc = ihh_E.log - mean(ihh_E.log, na.rm =TRUE)) %>%
+  ungroup() %>%
+  group_by(sex) %>%
+  mutate(ihh_C.log.cwc = ihh_C.log.cwc / sd(ihh_C.log.cwc, na.rm = TRUE),
+         ihh_T.log.cwc = ihh_T.log.cwc / sd(ihh_T.log.cwc, na.rm = TRUE),
+         ihh_P.log.cwc = ihh_P.log.cwc / sd(ihh_P.log.cwc, na.rm = TRUE),
+         ihh_E.log.cwc = ihh_E.log.cwc / sd(ihh_E.log.cwc, na.rm = TRUE),
+         ihh_C.log.cm = (ihh_C.log.cm - mean(ihh_C.log.cm, na.rm = TRUE)) / sd(ihh_C.log.cm, na.rm = TRUE),
+         ihh_T.log.cm = (ihh_T.log.cm - mean(ihh_T.log.cm, na.rm = TRUE)) / sd(ihh_T.log.cm, na.rm = TRUE),
+         ihh_P.log.cm = (ihh_P.log.cm - mean(ihh_P.log.cm, na.rm = TRUE)) / sd(ihh_P.log.cm, na.rm = TRUE),
+         ihh_E.log.cm = (ihh_E.log.cm - mean(ihh_E.log.cm, na.rm = TRUE)) / sd(ihh_E.log.cm, na.rm = TRUE))
+
+
+# break out datasets by sex/study/hormonal contraception use
+
+df_ihh.m <- df %>% filter(sex == "m")
+df_ihh.f <- df %>% filter(sex == "f")
+df_ihh.hc <- df_ihh.f %>% filter(HC == 1)
+df_ihh.nc <- df_ihh.f %>% filter(HC == 0)
+
+df.log_ihh.m <- df.log %>% filter(sex == "m")
+df.log_ihh.f <- df.log %>% filter(sex == "f")
+
+# create function for easier viewing of model output
+
+table.model <- function(model) {
+  model$coefficients %>%
+    as.data.frame() %>%
+    rownames_to_column(var = "Effect") %>%
+    mutate_if(is.numeric, round, 3) %>%
+    rename("SE" = 3, "tVal" = 5, "p" = 6) %>%
+    mutate(CI = paste0(round(Estimate - (1.96 * SE),2), "; " ,round(Estimate + (1.96 * SE),2))) %>%
+    relocate(CI, .after = Estimate) %>%
+    relocate(SE, .after = Estimate)
+}
+
+# this function runs an MLM using unstandardized, then standardized predictors and outcomes
+
+model_function <- function(df, outcome, HC = FALSE) {
+  
+  if (HC == TRUE) {
+    model1 <- lmer(unlist(df[outcome]) ~ ihh_C.cwc + ihh_T.cwc + ihh_C.cwc:ihh_T.cwc +
+                     ihh_C.cm + ihh_T.cm + ihh_C.cm:ihh_T.cm + ihh_C.cwc:HC + ihh_T.cwc:HC + ihh_C.cwc:ihh_T.cwc:HC +
+                     ihh_C.cm:HC + ihh_T.cm:HC + ihh_C.cm:ihh_T.cm:HC + HC + (1|subID), data = df)
+    
+    model2 <- lmer(scale(unlist(df[outcome])) ~ scale(ihh_C.cwc) + scale(ihh_T.cwc) + ihh_C.cwc:ihh_T.cwc +
+                     scale(ihh_C.cm) + scale(ihh_T.cm) + ihh_C.cm:ihh_T.cm + ihh_C.cwc:HC + ihh_T.cwc:HC + ihh_C.cwc:ihh_T.cwc:HC +
+                     ihh_C.cm:HC + ihh_T.cm:HC + ihh_C.cm:ihh_T.cm:HC + HC + (1|subID), data = df)
+    
+  }
+  
+  else {
+  
+    model1 <- lmer(unlist(df[outcome]) ~ ihh_C.cwc + ihh_T.cwc + ihh_C.cwc:ihh_T.cwc +
+                     ihh_C.cm + ihh_T.cm + ihh_C.cm:ihh_T.cm + (1|subID), data = df)
+    
+    model2 <- lmer(scale(unlist(df[outcome])) ~ scale(ihh_C.cwc) + scale(ihh_T.cwc) + ihh_C.cwc:ihh_T.cwc +
+                     scale(ihh_C.cm) + scale(ihh_T.cm) + ihh_C.cm:ihh_T.cm + (1|subID), data = df)
+  
+  }
+  
+  summary(model1)$coefficients %>%
+    as.data.frame() %>%
+    rownames_to_column(var = "Effect") %>%
+    mutate_if(is.numeric, round, 3) %>%
+    rename("SE" = 3, "t_val" = 5, "p_val" = 6) %>%
+    mutate(CI = paste0("[",round(Estimate - (1.96 * SE),2), "; " ,round(Estimate + (1.96 * SE),2),"]")) %>%
+    relocate(CI, .after = Estimate) %>%
+    relocate(SE, .after = Estimate) %>%
+    bind_cols(
+  
+    summary(model2)$coefficients %>%
+      as.data.frame() %>%
+      rownames_to_column(var = "Effect") %>%
+      mutate_if(is.numeric, round, 3) %>%
+      rename("Beta" = 2, "Beta_SE" = 3, "t_val" = 5, "p" = 6) %>%
+      mutate(Beta_CI = paste0("[",round(Beta - (1.96 * Beta_SE),2), "; " ,round(Beta + (1.96 * Beta_SE),2),"]")) %>%
+      relocate(Beta_CI, .after = Beta) %>%
+      dplyr::select(-c(Effect, Beta_SE, t_val, df, p))
+    ) %>% relocate(df, .after = Beta_CI) %>% relocate(t_val, .after = df) %>% relocate(p_val, .after = t_val)
+}
+
+lm.beta.lmer <- function(mod) {
+  b <- fixef(mod)[-1]
+  sd.x <- apply(getME(mod,"X")[,-1],2,sd)
+  sd.y <- sd(getME(mod,"y"))
+  b*sd.x/sd.y
+}
+
+write_csv(df, "dhh.csv")
+write_csv(df_ihh.f, "dhh_f.csv")
+write_csv(df_ihh.nc, "dhh_nc.csv")
+write_csv(df_ihh.hc, "dhh_hc.csv")
+write_csv(df_ihh.m, "dhh_m.csv")
+
+###############################################################################################################################
+################################################                               ################################################
+################################################     DESCRIPTIVE STATISTICS    ################################################
+################################################                               ################################################
+###############################################################################################################################
+
+# inter-item reliability tests (cronbach's alpha for SOI and SDI questions)
+
+df_sdi <- df %>%
+  dplyr::select(soit1:soit9)
+
+df_sdi <- df %>%
+  dplyr::select(sdi1:sdi14)
+
+library(ltm)
+cronbach.alpha(df_soi, na.rm = T)
+cronbach.alpha(df_sdi, na.rm = T)
+detach(package:ltm)
+remove(df_sdi)
+remove(df_soi)
+
+# Table 1 - age, total n, and n of subs with at least one set of T, C, and either SDI or SOI samples
+
+options(table_counter = TRUE)
+
+df %>%
+  filter(session == 1, !is.na(HC) | sex == "m") %>%
+  group_by(sex, HC) %>%
+  summarise("Age (mean)" = round(mean(age), 2), "SD" = round(sd(age), 2), n = n()) %>%
+  ungroup() %>%
+  dplyr::select(-c(HC, sex)) %>%
+  htmlTable(align = "c",
+            caption = "Age statistics broken out by subgroup",
+            rnames = c("Women (NC)", "Women (HC)", "Men"))
+
+# Table 2 - n of subs with one or twos set of T, C, and either SDI or SOI samples
+
+df %>%
+  filter(session == 1) %>%
+  dplyr::select(n_sessions, sex, HC, ihh_T, ihh_C, sdi_mean, soi_mean) %>%
+  group_by(n_sessions, sex, HC) %>%
+  summarise(n = n(),
+            "n (SOI)" = sum(!is.na(ihh_T) & !is.na(ihh_C) & !is.na(soi_mean)),
+            "n (SDI)" = sum(!is.na(ihh_T) & !is.na(ihh_C) & !is.na(sdi_mean))) %>%
+  filter(!is.na(HC) | sex == "m") %>%
+  ungroup() %>%
+  dplyr::select(-c(HC, sex, n_sessions)) %>%
+  htmlTable(align = "c",
+            col.rgroup = c("none", "#F7F7F7"),
+            tspanner = c("Single session","2 Sessions"), n.tspanner = c(3,3),
+            caption = "Sample sizes broken out by number of sessions",
+            rnames = c("Women (NC)", "Women (HC)", "Men",
+                       "Women (NC)", "Women (HC)", "Men"))
+
+
+# Table 3 - SOI-R and SDI-2 Statistics
+
+table3Rows = c("SOI-R ", "SOI: Attitudes", "SOI: Behavior", "SOI: Desire", "SDI-2",
+               "SDI: Solitary", "SDI: Dyadic")
+table3Cols = c("n", "Mean", "SD")
+
+table3 <- df_ihh.m %>%
+  dplyr::select(session, soi_mean_mean, soi_attit_mean, soi_behav_mean, soi_des_mean, sdi_mean_mean, sdi_sol_mean, sdi_dyad_mean, ihh_T_mean, ihh_C_mean) %>%
+  filter(!is.na(ihh_T_mean), !is.na(ihh_C_mean), session == 1) %>%
+  describe %>%
+  bind_cols(as.numeric(rep("",10)), df_ihh.hc %>%
+              dplyr::select(session, soi_mean_mean, soi_attit_mean, soi_behav_mean, soi_des_mean,
+                            sdi_mean_mean, sdi_sol_mean, sdi_dyad_mean, ihh_T_mean, ihh_C_mean) %>%
+              filter(!is.na(ihh_T_mean), !is.na(ihh_C_mean), session == 1) %>%
+              describe %>%
+              bind_cols(as.numeric(rep("",10)), df_ihh.nc %>%
+                          dplyr::select(session, soi_mean_mean, soi_attit_mean, soi_behav_mean,
+                                        soi_des_mean, sdi_mean_mean, sdi_sol_mean, sdi_dyad_mean, ihh_T_mean, ihh_C_mean) %>%
+                          filter(!is.na(ihh_T_mean), !is.na(ihh_C_mean), session == 1) %>%
+                          describe))
+
+htmlTable(round(table3[2:8,c(2:4, 14, 16:18, 28, 30:32)], 2),
+          align = "c",
+          caption = "Responses to SOI-R, SDI-2, and subscales",
+          rnames = table3Rows, 
+          header = c(table3Cols, "", table3Cols, "", table3Cols),
+          col.rgroup = c("none", "#F7F7F7"),
+          cgroup = c("Men", "", "Women (HC)", "", "Women (NC)"), n.cgroup = c(3, 1, 3, 1, 3))
+
+# Table 4 - Raw hormone average levels
+
+table4Rows = c("T", "C", "P", "E")
+table4Cols = c("n", "Mean", "SD")
+
+table4 <- df_ihh.m %>%
+  filter(session == 1) %>%
+  dplyr::select(ihh_T_cm, ihh_C_cm, ihh_P_cm, ihh_E_cm) %>% 
+  describe %>%
+  bind_cols(as.numeric(rep("",4)), df_ihh.hc %>%
+              filter(session == 1) %>%
+              dplyr::select(ihh_T_cm, ihh_C_cm, ihh_P_cm, ihh_E_cm) %>%
+              describe, as.numeric(rep("",4)), df_ihh.nc %>%
+              filter(session == 1) %>%
+              dplyr::select(ihh_T_cm, ihh_C_cm, ihh_P_cm, ihh_E_cm) %>%
+              describe)
+
+table4 <- round(table4, 2)
+table4[3:4, 2:4] <- "NA"
+table4 <- table4[1:4,c(14, 2:4, 14, 16:18, 28, 30:32)]
+
+htmlTable(table4,
+          align = "c",
+          caption = "Raw hormone descriptive statistics",
+          rnames = table4Rows, 
+          header = c("", table4Cols, "", table4Cols, "", table4Cols),
+          col.rgroup = c("none", "#F7F7F7"),
+          cgroup = c("", "Men", "", "Women (HC)", "", "Women (NC)"), n.cgroup = c(1, 3, 1, 3, 1, 3))
+
+# sex differences on SOI-R, SDI-2, and subject-mean hormones
+
+ihh.sex <- df %>%
+  filter(!is.na(soi_mean), !is.nan(soi_mean), !is.na(sex)) %>%
+  dplyr::select(subID, soi_mean, sex, sdi_mean, ihh_C, ihh_T) %>%
+  group_by(subID) %>%
+  mutate(soi_mean = mean(soi_mean),
+         sdi_mean = mean(sdi_mean),
+         C_mean = mean(soi_mean),
+         T_mean = mean(sdi_mean))
+
+wilcox.test(ihh.sex$soi_mean ~ ihh.sex$sex)
+t.test(ihh.sex$sdi_mean ~ ihh.sex$sex)
+t.test(ihh.sex$T_mean ~ ihh.sex$sex)
+t.test(ihh.sex$C_mean ~ ihh.sex$sex)
+remove(ihh_sex)
+
+par(mar=c(9,1,4,2))
+
+df_ihh.f %>%
+  filter(session == 1, !is.na(ihh_race)) %>%
+  dplyr::select(ihh_race) %>%
+  unlist() %>%
+  hist(xlim = range(1,6), ylim = range(0,650), density = 15, labels = TRUE, col = "blue1", border = "dodgerblue3",
+       breaks = 5, main = paste("Histogram of Women's\nRace/Ethnicity"), ylab = "", axes = FALSE)
+
+axis(1, at = c(2.5, 3.5, 4.5, 5.5),
+     labels = c("Asian", "Pacific Islander", "White, non-Hispanic", "Black or African American"), las=2)
+
+df_ihh.m %>%
+  filter(session == 1, !is.na(ihh_race)) %>%
+  dplyr::select(ihh_race) %>%
+  unlist() %>%
+  hist(xlim = range(1,6), ylim = range(0,200), density = 15, labels = TRUE, col = "red1", border = "dodgerblue3",
+       breaks = 5, main = paste("Histogram of Men's\nRace/Ethnicity"), ylab = "", axes = FALSE)
+
+axis(1, at = c(2.5, 3.5, 4.5, 5.5),
+     labels = c("Asian", "Pacific Islander", "White, non-Hispanic", "Black or African American"), las=2)
+
+par(mar=c(3,3,3,3))
+
+###############################################################################################################################
+##############################################                                     ############################################
+##############################################          Data visualization         ############################################
+##############################################                                     ############################################
+###############################################################################################################################
+
+
+# Raw hormone data plots; data for both sexes
+
+par(mfrow=c(3,2))
+
+plot(df$ihh_C[!is.na(df$ihh_C)], ylab = "Cortisol")
+plot(df$ihh_T[!is.na(df$ihh_T)], ylab = "Testosterone")
+plot(df$ihh_P[!is.na(df$ihh_P)], ylab = "Progesterone")
+plot(df$ihh_E[!is.na(df$ihh_E)], ylab = "Estradiol")
+
+plot(df$ihh_C[!is.na(df$ihh_C) & df$ihh_C < 40], ylab = "Cortisol - 1 Outlier") # cortisol w/out 20 sd outlier
+plot(df$ihh_T[!is.na(df$ihh_T) & df$ihh_T < 145], ylab = "Testosterone - 3 Outliers") # testosterone w/out 20 sd outlier
+
+# Hormone data: Each point is a subject mean, global-mean centered on zero, scaled (to sd = 1) within sex; data for both sexes
+
+plot(df$ihh_C.cm[!is.na(df$ihh_C.cm)], ylab = "Cortisol")
+plot(df$ihh_T.cm[!is.na(df$ihh_T.cm)], ylab = "Testosterone")
+plot(df$ihh_P.cm[!is.na(df$ihh_P.cm)], ylab = "Progesterone")
+plot(df$ihh_E.cm[!is.na(df$ihh_E.cm)], ylab = "Estradiol")
+
+plot(df$ihh_C.cm[!is.na(df$ihh_C.cm) & df$ihh_C.cm < 19.5], ylab = "Cortisol") # cortisol without ~ 20 sd outlier
+plot(df$ihh_T.cm[!is.na(df$ihh_T.cm) & df$ihh_T.cm < 9.5], ylab = "Testosterone") # testosterone without ~ 20 sd outlier
+
+# Hormone data: Each point is a session, subject-mean centered on zero, scaled (to sd = 1) within sex; data for both sexes
+
+par(mfrow=c(2,2))
+
+plot(df$ihh_C.cwc[!is.na(df$ihh_C.cwc)])
+plot(df$ihh_T.cwc[!is.na(df$ihh_T.cwc)])
+plot(df$ihh_P.cwc[!is.na(df$ihh_P.cwc)])
+plot(df$ihh_E.cwc[!is.na(df$ihh_E.cwc)])
+
+# Supplementary Figures 1-4 : Correlations of scales and their subscales; each scale/sex combination presented separately
+
+pairs.panels(
+  df_ihh.m %>% select(sdi_mean, sdi_sol, sdi_dyad), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.9, cex.cor = 2, ellipses = FALSE)
+
+pairs.panels(
+  df_ihh.f %>% select(sdi_mean, sdi_sol, sdi_dyad), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.9, cex.cor = 2, ellipses = FALSE)
+
+pairs.panels(
+  df_ihh.m %>% select(soi_mean, soi_attit, soi_behav, soi_des), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.9, cex.cor = 2, ellipses = FALSE)
+
+pairs.panels(
+  df_ihh.f %>% select(soi_mean, soi_attit, soi_behav, soi_des), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.9, cex.cor = 2, ellipses = FALSE)
+
+# Supplementary Figures 5-6: Correlations of ALL scales and subscales, seperately by sex
+
+pairs.panels(
+  df_ihh.m %>% select(soi_mean, soi_attit, soi_behav, soi_des, sdi_mean, sdi_sol, sdi_dyad), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.9, cex.cor = 2, ellipses = FALSE)
+
+pairs.panels(
+  df_ihh.f %>% select(soi_mean, soi_attit, soi_behav, soi_des, sdi_mean, sdi_sol, sdi_dyad), stars= TRUE, method = "pearson", hist.col = "gray", cex.labels=1.9, cex.cor = 2, ellipses = FALSE)
+
+# Supplementary Figure 7: Log-transformed raw hormone data plots; data for both sexes
+
+par(mfrow=c(2,2))
+
+plot(df.log$ihh_C.log[!is.na(df.log$ihh_C.log)], ylab = "Log Cortisol")
+plot(df.log$ihh_T.log[!is.na(df.log$ihh_T.log)], ylab = "Log Testosterone")
+plot(df.log$ihh_P.log[!is.na(df.log$ihh_P.log)], ylab = "Log Progesterone")
+plot(df.log$ihh_E.log[!is.na(df.log$ihh_E.log)], ylab = "Log Estradiol")
+
+# Supplementary Figure 8: Log-transformed hormone data: Each point is a subject mean, global-mean centered on zero, scaled (to sd = 1) within sex; data for both sexes
+
+plot(df.log$ihh_C.log.cm[!is.na(df.log$ihh_C.log.cm)], ylab = "Log Cortisol")
+plot(df.log$ihh_T.log.cm[!is.na(df.log$ihh_T.log.cm)], ylab = "Log Testosterone")
+plot(df.log$ihh_P.log.cm[!is.na(df.log$ihh_P.log.cm)], ylab = "Log Progesterone")
+plot(df.log$ihh_E.log.cm[!is.na(df.log$ihh_E.log.cm)], ylab = "Log Estradiol")
+
+# Supplementary Figure 9: Log-transformed hormone data: Each point is a session, subject-mean centered on zero, scaled (to sd = 1) w/in sex; data for both sexes
+
+plot(df.log$ihh_C.log.cwc[!is.na(df.log$ihh_C.log.cwc)], ylab = "Log Cortisol")
+plot(df.log$ihh_T.log.cwc[!is.na(df.log$ihh_T.log.cwc)], ylab = "Log Testosterone")
+plot(df.log$ihh_P.log.cwc[!is.na(df.log$ihh_P.log.cwc)], ylab = "Log Progesterone")
+plot(df.log$ihh_E.log.cwc[!is.na(df.log$ihh_E.log.cwc)], ylab = "Log Estradiol")
+
+###############################################################################################################################
+##############################################                                     ############################################
+##############################################        Preliminary Analyses         ############################################
+##############################################                                     ############################################
+###############################################################################################################################
+
+# are SOI and/or SDI higher in higher T sessions in women?
+
+soi_binary_T_f <- df_ihh.f %>%
+  filter(n_sessions == 2, !is.na(soi_mean) & !is.na(binary_T)) %>%
+  select(subID, binary_T, binary_C, soi_mean) %>%
+  pivot_wider(id_cols = subID, names_from = c(binary_T), values_from = c(soi_mean, binary_C))
+
+sdi_binary_T_f <- df_ihh.f %>%
+  filter(n_sessions == 2, !is.na(sdi_mean) & !is.na(binary_T)) %>%
+  select(subID, binary_T, binary_C, sdi_mean) %>%
+  pivot_wider(id_cols = subID, names_from = c(binary_T), values_from = c(sdi_mean, binary_C))
+
+t.test(soi_binary_T_f$soi_mean_low, soi_binary_T_f$soi_mean_high, paired = TRUE)
+t.test(sdi_binary_T_f$sdi_mean_low, sdi_binary_T_f$sdi_mean_high, paired = TRUE)
+
+# are SOI and/or SDI higher in higher T sessions in men?
+
+soi_binary_T_m <- df_ihh.m %>%
+  filter(n_sessions == 2, !is.na(soi_mean) & !is.na(binary_T)) %>%
+  select(subID, binary_T, binary_C, soi_mean) %>%
+  pivot_wider(id_cols = subID, names_from = c(binary_T), values_from = c(soi_mean, binary_C))
+
+sdi_binary_T_m <- df_ihh.m %>%
+  filter(n_sessions == 2, !is.na(sdi_mean) & !is.na(binary_T)) %>%
+  select(subID, binary_T, binary_C, sdi_mean) %>%
+  pivot_wider(id_cols = subID, names_from = c(binary_T), values_from = c(sdi_mean, binary_C))
+
+t.test(soi_binary_T_m$soi_mean_low, soi_binary_T_m$soi_mean_high, paired = TRUE)
+t.test(sdi_binary_T_m$sdi_mean_low, sdi_binary_T_m$sdi_mean_high, paired = TRUE)
+
+# are SOI and/or SDI higher in higher T sessions that are also higher/lower C sessions (additive/antagonistic effects) in women?
+
+soi_add_C_f <- soi_binary_T_f %>%
+  filter(binary_C_low == "low")
+
+soi_ant_C_f <- soi_binary_T_f %>%
+  filter(binary_C_low == "high")
+
+sdi_add_C_f <- sdi_binary_T_f %>%
+  filter(binary_C_low == "low")
+
+sdi_ant_C_f <- sdi_binary_T_f %>%
+  filter(binary_C_low == "high")
+
+t.test(soi_add_C_f$soi_mean_low, soi_add_C_f$soi_mean_high, paired = TRUE)
+t.test(soi_ant_C_f$soi_mean_low, soi_ant_C_f$soi_mean_high, paired = TRUE)
+
+t.test(sdi_add_C_f$sdi_mean_low, sdi_add_C_f$sdi_mean_high, paired = TRUE)
+t.test(sdi_ant_C_f$sdi_mean_low, sdi_ant_C_f$sdi_mean_high, paired = TRUE)
+
+# are SOI and/or SDI higher in higher T sessions that are also higher/lower C sessions (additive/antagonistic effects) in men?
+
+soi_add_C_m <- soi_binary_T_m %>%
+  filter(binary_C_low == "low")
+
+soi_ant_C_m <- soi_binary_T_m %>%
+  filter(binary_C_low == "high")
+
+sdi_add_C_m <- sdi_binary_T_m %>%
+  filter(binary_C_low == "low")
+
+sdi_ant_C_m <- sdi_binary_T_m %>%
+  filter(binary_C_low == "high")
+
+t.test(soi_add_C_m$soi_mean_low, soi_add_C_m$soi_mean_high, paired = TRUE)
+t.test(soi_ant_C_m$soi_mean_low, soi_ant_C_m$soi_mean_high, paired = TRUE)
+
+t.test(sdi_add_C_m$sdi_mean_low, sdi_add_C_m$sdi_mean_high, paired = TRUE)
+t.test(sdi_ant_C_m$sdi_mean_low, sdi_ant_C_m$sdi_mean_high, paired = TRUE)
+
+### Preliminarry analysis: HORMONES UNCENTERED: Within- and between-individual effects ARE NOT isolated
+
+# men
+lm.beta.lmer(lmer(sdi_mean ~ ihh_T*ihh_C + (1 | subID), data = df_ihh.m))
+
+m.d <- table.model(summary(lmer(sdi_mean ~ ihh_T*ihh_C + (1 | subID), data = df_ihh.m))) # sdi-2
+
+m.sol <- table.model(summary(lmer(sdi_sol ~ ihh_T*ihh_C + (1 | subID), data = df_ihh.m))) # sdi-2[solitary]
+
+m.dyad <- table.model(summary(lmer(sdi_dyad ~ ihh_T*ihh_C + (1 | subID), data = df_ihh.m))) # sdi-2[dyadic]
+
+m.s <- table.model(summary(lmer(soi_mean ~ ihh_T*ihh_C + (1 | subID), data = df_ihh.m))) # soiR
+
+m.att <- table.model(summary(lmer(soi_attit ~ ihh_T*ihh_C + (1 | subID), data = df_ihh.m))) # soi-R[attitude]
+
+m.beh <- table.model(summary(lmer(soi_behav ~ ihh_T*ihh_C + (1 | subID), data = df_ihh.m))) # soi-R[behavior]
+
+m.des <- table.model(summary(lmer(soi_des ~ ihh_T*ihh_C + (1 | subID), data = df_ihh.m))) # soi-R[desire]
+
+
+# women
+
+w.d <- table.model(summary(lmer(sdi_mean ~ ihh_T*ihh_C*HC + (1 | subID), data = df_ihh.f))) # sdi-2
+
+w.sol <- table.model(summary(lmer(sdi_sol ~ ihh_T*ihh_C*HC + (1 | subID), data = df_ihh.f))) # sdi-2[solitary]
+
+w.dyad <- table.model(summary(lmer(sdi_dyad ~ ihh_T*ihh_C*HC + (1 | subID), data = df_ihh.f))) # sdi-2[dyadic]
+
+w.s <- table.model(summary(lmer(soi_mean ~ ihh_T*ihh_C*HC + (1 | subID), data = df_ihh.f))) # soiR
+
+w.att <- table.model(summary(lmer(soi_attit ~ ihh_T*ihh_C*HC + (1 | subID), data = df_ihh.f))) # soi-R[attitude]
+
+w.beh <- table.model(summary(lmer(soi_behav ~ ihh_T*ihh_C*HC + (1 | subID), data = df_ihh.f))) # soi-R[behavior]
+
+w.des <- table.model(summary(lmer(soi_des ~ ihh_T*ihh_C*HC + (1 | subID), data = df_ihh.f))) # soi-R[desire]
+
+
+###############################################################################################################################
+##############################################                                     ############################################
+##############################################    DUAL-HORMONE HYPOTHESIS TESTS    ############################################
+##############################################                                     ############################################
+###############################################################################################################################
+
+### Main and exploratory Analyses: hormones centered; Within(cwc)- and between(cm)-individual effects ARE isolated
+
+# men
+
+m.d_w <- model_function(df_ihh.m, "sdi_mean")
+
+m.sol_w <- model_function(df_ihh.m, "sdi_sol")
+
+m.dyad_w <- model_function(df_ihh.m, "sdi_dyad")
+
+m.s_w <- model_function(df_ihh.m, "soi_mean")
+
+m.att_w <- model_function(df_ihh.m, "soi_attit")
+
+m.beh_w <- model_function(df_ihh.m, "soi_behav")
+
+m.des_w <- model_function(df_ihh.m, "soi_des")
+
+
+# women
+
+w.d_w <- model_function(df_ihh.f, "sdi_mean",1)
+
+w.sol_w <- model_function(df_ihh.f, "sdi_sol",1)
+
+w.dyad_w <- model_function(df_ihh.f, "sdi_dyad",1)
+
+w.s_w <- model_function(df_ihh.f, "soi_mean",1)
+
+w.att_w <- model_function(df_ihh.f, "soi_attit",1)
+
+w.beh_w <- model_function(df_ihh.f, "soi_behav",1)
+
+w.des_w <- model_function(df_ihh.f, "soi_des",1)
+
+###############################################################################################################################
+##############################################                                     ############################################
+##############################################         Robustness Analyses         ############################################
+##############################################                                     ############################################
+###############################################################################################################################
+
+# women taking hormonal contraception
+
+hc.d_w <- model_function(df_ihh.hc, "sdi_mean")
+
+hc.sol_w <- model_function(df_ihh.hc, "sdi_sol")
+
+hc.dyad_w <- model_function(df_ihh.hc, "sdi_dyad")
+
+hc.s_w <- model_function(df_ihh.hc, "soi_mean")
+
+hc.att_w <- model_function(df_ihh.hc, "soi_attit")
+
+hc.beh_w <- model_function(df_ihh.hc, "soi_behav")
+
+hc.des_w <- model_function(df_ihh.hc, "soi_des")
+
+# women NOT taking hormonal contraception
+
+nc.d_w <- model_function(df_ihh.nc, "sdi_mean")
+
+nc.sol_w <- model_function(df_ihh.nc, "sdi_sol")
+
+nc.dyad_w <- model_function(df_ihh.nc, "sdi_dyad")
+
+nc.s_w <- model_function(df_ihh.nc, "soi_mean")
+
+nc.att_w <- model_function(df_ihh.nc, "soi_attit")
+
+nc.beh_w <- model_function(df_ihh.nc, "soi_behav")
+
+nc.des_w <- model_function(df_ihh.nc, "soi_des")
+
+# power calculations
+
+menPower <- m.d_w %>%
+  bind_rows(m.sol_w,m.dyad_w, m.s_w, m.att_w, m.beh_w, m.des_w) %>%
+  dplyr::select(Effect,SE) %>%
+  filter(Effect == "ihh_C.cm:ihh_T.cm" | Effect == "ihh_C.cwc:ihh_T.cwc") %>%
+  mutate(Model = c(rep("SDI",2), rep("SDI Solitary",2), rep("SDI Dyadic",2), rep("SOI",2), rep("SOI Attitudes",2), rep("SOI Behavior",2), rep("SOI Desire",2)),
+         Parameter = rep(c("within","between"),7),
+         "Powered For" = paste("+/-", round(SE * 2.8,3))) %>%
+  relocate(Model, .before = Effect) %>%
+  relocate(Parameter, .after = Model) %>%
+  relocate("Powered For", .after = SE) %>%
+  dplyr::select(-c(Effect)) %>%
+  htmlTable(align = "l", css.cell = "padding-right: 1.5em")
+
+ncPower <- nc.d_w %>%
+  bind_rows(nc.sol_w,nc.dyad_w, nc.s_w, nc.att_w, nc.beh_w, nc.des_w) %>%
+  dplyr::select(Effect,SE) %>%
+  filter(Effect == "ihh_C.cm:ihh_T.cm" | Effect == "ihh_C.cwc:ihh_T.cwc") %>%
+  mutate(Model = c(rep("SDI",2), rep("SDI Solitary",2), rep("SDI Dyadic",2), rep("SOI",2), rep("SOI Attitudes",2), rep("SOI Behavior",2), rep("SOI Desire",2)),
+         Parameter = rep(c("within","between"),7),
+         "Powered For" = paste("+/-", round(SE * 2.8,3))) %>%
+  relocate(Model, .before = Effect) %>%
+  relocate(Parameter, .after = Model) %>%
+  relocate("Powered For", .after = SE) %>%
+  dplyr::select(-c(Effect)) %>%
+  htmlTable(align = "l", css.cell = "padding-right: 1.5em")
+
+hcPower <- hc.d_w %>%
+  bind_rows(hc.sol_w,hc.dyad_w, hc.s_w, hc.att_w, hc.beh_w, hc.des_w) %>%
+  dplyr::select(Effect,SE) %>%
+  filter(Effect == "ihh_C.cm:ihh_T.cm" | Effect == "ihh_C.cwc:ihh_T.cwc") %>%
+  mutate(Model = c(rep("SDI",2), rep("SDI Solitry",2), rep("SDI Desire",2), rep("SOI",2), rep("SOI Attitudes",2), rep("SOI Behavior",2), rep("SOI Desire",2)),
+         Parameter = rep(c("within","between"),7),
+         "Powered For" = paste("+/-", round(SE * 2.8,3))) %>%
+  relocate(Model, .before = Effect) %>%
+  relocate(Parameter, .after = Model) %>%
+  relocate("Powered For", .after = SE) %>%
+  dplyr::select(-c(Effect)) %>%
+  htmlTable(align = "l", css.cell = "padding-right: 1.5em")
+
+# False discovery rate data
+
+womenFalseDiscoveryData <- data.frame('adj alpha' = round(0.05 * ((13 + 1 - c(1:13))/13),3))
+womenFalseDiscoveryData["Women's SDI"] <- sort(w.d_w$p[2:14], decreasing=T)
+womenFalseDiscoveryData["Women's SDI Sol"] <- sort(w.sol_w$p[2:14], decreasing=T)
+womenFalseDiscoveryData["Women's SDI Dyad"] <- sort(w.dyad_w$p[2:14], decreasing=T)
+womenFalseDiscoveryData["Women's SOI"] <- sort(w.s_w$p[2:14], decreasing=T)
+womenFalseDiscoveryData["Women's SOI Attit"] <- sort(w.att_w$p[2:14], decreasing=T)
+womenFalseDiscoveryData["Women's SOI Behav"] <- sort(w.beh_w$p[2:14], decreasing=T)
+womenFalseDiscoveryData["Women's SOI Des"] <- sort(w.des_w$p[2:14], decreasing=T)
+
+ncFalseDiscoveryData <- data.frame('adj alpha' = round(0.05 * ((6 + 1 - c(1:6))/6),3))
+ncFalseDiscoveryData["NC Women's SDI"] <- sort(nc.d_w$p[2:7], decreasing=T)
+ncFalseDiscoveryData["NC Women's SDI Sol"] <- sort(nc.sol_w$p[2:7], decreasing=T)
+ncFalseDiscoveryData["NC Women's SDI Dyad"] <- sort(nc.dyad_w$p[2:7], decreasing=T)
+ncFalseDiscoveryData["NC Women's SOI"] <- sort(nc.s_w$p[2:7], decreasing=T)
+ncFalseDiscoveryData["NC Women's SOI Attit"] <- sort(nc.att_w$p[2:7], decreasing=T)
+ncFalseDiscoveryData["NC Women's SOI Behav"] <- sort(nc.beh_w$p[2:7], decreasing=T)
+ncFalseDiscoveryData["NC Women's SOI Des"] <- sort(nc.des_w$p[2:7], decreasing=T)
+
+hcFalseDiscoveryData <- data.frame('adj alpha' = round(0.05 * ((6 + 1 - c(1:6))/6),3))
+hcFalseDiscoveryData["HC Women's SDI"] <- sort(hc.d_w$p[2:7], decreasing=T)
+hcFalseDiscoveryData["HC Women's SDI Sol"] <- sort(hc.sol_w$p[2:7], decreasing=T)
+hcFalseDiscoveryData["HC Women's SDI Dyad"] <- sort(hc.dyad_w$p[2:7], decreasing=T)
+hcFalseDiscoveryData["HC Women's SOI"] <- sort(hc.s_w$p[2:7], decreasing=T)
+hcFalseDiscoveryData["HC Women's SOI Attit"] <- sort(hc.att_w$p[2:7], decreasing=T)
+hcFalseDiscoveryData["HC Women's SOI Behav"] <- sort(hc.beh_w$p[2:7], decreasing=T)
+hcFalseDiscoveryData["HC Women's SOI Des"] <- sort(hc.des_w$p[2:7], decreasing=T)
+
+menFalseDiscoveryData <- data.frame('adj alpha' = round(0.05 * ((6 + 1 - c(1:6))/6),3))
+menFalseDiscoveryData["Men's SDI"] <- sort(m.d_w$p[2:7], decreasing=T)
+menFalseDiscoveryData["Men's SDI Sol"] <- sort(m.sol_w$p[2:7], decreasing=T)
+menFalseDiscoveryData["Men's SDI Dyad"] <- sort(m.dyad_w$p[2:7], decreasing=T)
+menFalseDiscoveryData["Men's SOI"] <- sort(m.s_w$p[2:7], decreasing=T)
+menFalseDiscoveryData["Men's SOI Attit"] <- sort(m.att_w$p[2:7], decreasing=T)
+menFalseDiscoveryData["Men's SOI Behav"] <- sort(m.beh_w$p[2:7], decreasing=T)
+menFalseDiscoveryData["Men's SOI Des"] <- sort(m.des_w$p[2:7], decreasing=T)
+
+totalFalseDiscoveryDataWomen <- data.frame('adj alpha' = round(0.05 * ((91 + 1 - c(1:91))/91),3))
+totalFalseDiscoveryDataHC <- data.frame('adj alpha' = round(0.05 * ((42 + 1 - c(1:42))/42),3))
+totalFalseDiscoveryDataNC <- data.frame('adj alpha' = round(0.05 * ((42 + 1 - c(1:42))/42),3))
+totalFalseDiscoveryDataMen <- data.frame('adj alpha' = round(0.05 * ((42 + 1 - c(1:42))/42),3))
+
+totalFalseDiscoveryDataWomen['pVals'] <- sort(c(w.d_w$p[2:14],w.sol_w$p[2:14],w.dyad_w$p[2:14],w.s_w$p[2:14],
+                                                w.att_w$p[2:14],w.beh_w$p[2:14],w.des_w$p[2:14]), decreasing=T)
+
+totalFalseDiscoveryDataHC['pVals'] <- sort(c(hc.d_w$p[2:7],hc.sol_w$p[2:7],hc.dyad_w$p[2:7],hc.s_w$p[2:7],
+                                             hc.att_w$p[2:7],hc.beh_w$p[2:7],hc.des_w$p[2:7]), decreasing=T)
+
+totalFalseDiscoveryDataNC['pVals'] <- sort(c(nc.d_w$p[2:7],nc.sol_w$p[2:7],nc.dyad_w$p[2:7],nc.s_w$p[2:7],
+                                             nc.att_w$p[2:7],nc.beh_w$p[2:7],nc.des_w$p[2:7]), decreasing=T)
+
+totalFalseDiscoveryDataMen['pVals'] <- sort(c(m.d_w$p[2:7],m.sol_w$p[2:7],m.dyad_w$p[2:7],m.s_w$p[2:7],
+                                              m.att_w$p[2:7],m.beh_w$p[2:7],m.des_w$p[2:7]), decreasing=T)
+
+htmlTable(womenFalseDiscoveryData)
+htmlTable(hcFalseDiscoveryData)
+htmlTable(ncFalseDiscoveryData)
+htmlTable(menFalseDiscoveryData)
+
+htmlTable(totalFalseDiscoveryDataWomen)
+htmlTable(totalFalseDiscoveryDataHC)
+htmlTable(totalFalseDiscoveryDataNC)
+htmlTable(totalFalseDiscoveryDataMen)
+
+# simple slopes at subject-mean centered cortisol = -2, -1, 0 +1, and +2 SDs
+
+simpleSlopes <- function(data, dependent, min, max, interval) {
+  
+  model <- lm(dependent~ data$ihh_T.cwc*data$ihh_C.cwc)
+  est <- summary(model)[4]$coefficients[1:4,1] %>% unlist
+  df <- summary(model)[[7]][2]
+  slopelist <- c()
+  clist <- c()
+  plist <- c()
+  tlist <- c()
+  
+  dflist <- c()
+  
+  for (i in seq(min,max,by=interval)) {
+    
+    d <- data.frame(cat = i, estimate = est[1] + est[2]*data["ihh_T.cwc"] + est[3]*i +
+                 est[4]*data["ihh_T.cwc"]*i, data["ihh_T.cwc"])
+    
+    colnames(d) <- c("cort_level", "estimate", "testosterone")
+    
+    dflist <- bind_rows(dflist, d)
+    
+    intercept <- est[1] + est[3]*i
+    slope <- est[4]*i + est[2]
+    v <- vcov(model, full = TRUE, ranpar = "var")
+    se <- v[2,2] + 2*i*v[2,4] + i*i*v[4,4]
+    
+    t <- round(slope / sqrt(se),2)
+    slopelist <- c(slopelist,paste0(round(slope,2), " (",round(se,2),")"))
+    clist <- c(clist,i)
+    tlist <- c(tlist, t)
+    plist <- c(plist, round(pt(t,df,lower.tail=is.negative(t)),3))
+  }
+  
+  dflist$cort_level <- as.factor(dflist$cort_level)
+  stats <- data.frame(Cortisol = clist, "Coefficient(SE)" = slopelist, tValue = tlist, pValue = plist)
+  return(c(dflist,stats))
+}
+
+data.nc <- simpleSlopes(df_ihh.nc, df_ihh.nc$sdi_dyad, -2,2,1)
+
+stats.nc <- data.frame(data.nc[4:7])
+data.nc <- data.frame(data.nc[1:3])
+
+htmlTable(stats.nc)
+
+#for (i in c(-2,-1,0,1,2)){
+#  print(summary(lm(estimate ~ testosterone,data %>% filter(cort_level==i))))
+#}
+
+nc = ggplot(data.nc, aes(testosterone,estimate, linetype = cort_level)) +
+  geom_smooth(method='lm', formula= y~x, se=F, color="black") +
+  scale_linetype_manual(values=c("dotted", "dotdash", "dashed", "longdash", "solid")) +
+  scale_color_manual("black") + labs(linetype="Cortisol SDs from mean") +
+  xlim(c(-2,2)) + ylim(c(4,7)) + theme_classic() + 
+  theme(legend.position="none", legend.key.width = unit(1.6, 'cm'), legend.key.height = unit(1.6, 'cm'), legend.title = element_text(size=13),
+        legend.text = element_text(size=13), axis.title.x = element_text(size=11, face="bold"),axis.title.y = element_text(size=11, face="bold"),
+        plot.title = element_text(size = 13, face = "bold")) +
+  ylab("Dyadic sexual desire") + xlab("Subject-mean centered testosterone") + ggtitle("(a)")
+ncLegend <- nc + theme(legend.position="bottom", legend.key.height = unit(1.6, 'cm'))
+
+data.hc <- simpleSlopes(df_ihh.hc, df_ihh.hc$sdi_dyad,-2,2,1)
+
+stats.hc <- data.frame(data[4:7])
+data.hc <- data.frame(data[1:3])
+
+htmlTable(stats.hc)
+
+#for (i in c(-2,-1,0,1,2)){
+#  print(summary(lm(estimate ~ testosterone,data %>% filter(cort_level==i))))
+#}
+
+hc = ggplot(data.hc, aes(testosterone,estimate, linetype = cort_level)) +
+  geom_smooth(method='lm', formula= y~x, se=F, color="black") +
+  scale_linetype_manual(values=c("dotted", "dotdash", "dashed", "longdash", "solid")) +
+  scale_color_manual("black") + labs(linetype="Cortisol SDs from mean") +
+  xlim(c(-2,2)) + ylim(c(4,7)) + theme_classic() +
+  theme(legend.position="none", legend.key.width = unit(1.6, 'cm'), legend.key.height = unit(3.6, 'cm'), legend.title = element_text(size=13),
+        legend.text = element_text(size=12), axis.title.x = element_text(size=11, face="bold"),axis.title.y = element_text(size=11, face="bold"),
+        plot.title = element_text(size = 13, face = "bold")) +
+  ylab("Dyadic sexual desire") + xlab("Subject-mean centered testosterone") + ggtitle("(b)")
+
+data.msol <- simpleSlopes(df_ihh.m, df_ihh.m$sdi_sol,-2,2,1)
+
+stats.msol <- data.frame(data.msol[4:7])
+data.msol <- data.frame(data.msol[1:3])
+
+htmlTable(stats.msol)
+
+#for (i in c(-2,-1,0,1,2)){
+#  print(summary(lm(estimate ~ testosterone,data %>% filter(cort_level==i))))
+#}
+
+m.sol = ggplot(data.msol, aes(testosterone,estimate, linetype = cort_level)) +
+  geom_smooth(method='lm', formula= y~x, se=F, color="black") +
+  scale_linetype_manual(values=c("dotted", "dotdash", "dashed", "longdash", "solid")) +
+  scale_color_manual("black") + labs(linetype="Cortisol SDs from mean") + xlim(c(-2,2)) + ylim(c(4,7)) + theme_classic() +
+  theme(legend.position="none", legend.key.width = unit(1.6, 'cm'), legend.key.height = unit(1.6, 'cm'), legend.title = element_text(size=13),
+        legend.text = element_text(size=12), axis.title.x = element_text(size=11, face="bold"),axis.title.y = element_text(size=11, face="bold"),
+        plot.title = element_text(size = 13, face = "bold")) + ylab("Solitary sexual desire") +
+  xlab("Subject-mean centered testosterone") + ggtitle("(a)")
+m.solLegend <- m.sol + theme(legend.position="bottom", legend.key.height = unit(1.6, 'cm'))
+
+data.mdyad <- simpleSlopes(df_ihh.m, df_ihh.m$sdi_dyad,-2,2,1)
+
+stats.mdyad <- data.frame(data.mdyad[4:7])
+data.mdyad <- data.frame(data.mdyad[1:3])
+
+htmlTable(stats.mdyad)
+
+#for (i in c(-2,-1,0,1,2)){
+#  print(summary(lm(estimate ~ testosterone,data %>% filter(cort_level==i))))
+#}
+
+m.dyad = ggplot(data.mdyad, aes(testosterone,estimate, linetype = cort_level)) +
+  geom_smooth(method='lm', formula= y~x, se=F, color="black") +
+  scale_linetype_manual(values=c("dotted", "dotdash", "dashed", "longdash", "solid")) +
+  scale_color_manual("black") + labs(linetype="Cortisol SDs from mean") + xlim(c(-2,2)) + ylim(c(4,7)) + theme_classic() +
+  theme(legend.position="none", legend.key.width = unit(1.6, 'cm'), legend.key.height = unit(3.6, 'cm'), legend.title = element_text(size=13),
+        legend.text = element_text(size=12), axis.title.x = element_text(size=11, face="bold"),axis.title.y = element_text(size=11, face="bold"),
+        plot.title = element_text(size = 13, face = "bold")) +
+  ylab("Dyadic sexual desire") + xlab("Subject-mean centered testosterone") + ggtitle("(b)")
+
+figureWomen <- ggarrange(nc,hc, ncol=2, nrow=1) %>%
+  gridExtra::grid.arrange(get_legend(ncLegend), heights = unit(c(85, 20), "mm"))
+figureWomen
+
+figureMen <- ggarrange(m.sol,m.dyad, ncol=2, nrow=1) %>%
+  gridExtra::grid.arrange(get_legend(m.solLegend), heights = unit(c(85, 20), "mm"))
+figureMen
+
+write_csv(data.nc, "simple_nc.csv")
+write_csv(data.hc, "simple_hc.csv")
+write_csv(data.mdyad, "simple_mdyad.csv")
+write_csv(data.msol, "simple_msol.csv")
+
+##### ESM Table 1 - Sociosexual orientation (women broken out by hormonal contraception use)
+
+table3cols <- c("Estimate", "SE", "CI", "Beta", "Beta CI", "df", "t", "p")
+table3rows <- c("Intercept", "T (within)", "C (within)", "T (between)",
+                "C (between)", "T x C (within)", "T x C (between)")
+table3 <- bind_rows(bind_cols(m.s_w[-c(1)], m.att_w[-c(1)], m.beh_w[-c(1)], m.des_w[-c(1)]),
+                          bind_cols(nc.s_w[-c(1)], nc.att_w[-c(1)], nc.beh_w[-c(1)], nc.des_w[-c(1)]),
+                          bind_cols(hc.s_w[-c(1)], hc.att_w[-c(1)], hc.beh_w[-c(1)], hc.des_w[-c(1)]))
+
+htmlTable(table3,
+          align = "c",
+          caption = "SOI-R Model results",
+          rnames = c(table3rows, table3rows, table3rows),
+          header = c(table3cols, table3cols, table3cols, table3cols),
+          col.rgroup = c("none", "#F7F7F7"),
+          cgroup = list(c("SOI-R"), c("General", "Attitudes", "Behavior", "Desire")),
+          n.cgroup = list(c(4), c(8, 8, 8, 8)),
+          tspanner = c("Men","Women not usng hormonal contraception", "Women using hormonal contraception"), n.tspanner = c(7,7),
+          css.tspanner = "padding-top: 0.5em; font-weight:bold",
+          css.cell = "padding-right: 0.5em")
+
+##### ESM Table 2 - Sexual desire (women broken out by hormonal contraception use)
+
+table4cols <- c("Estimate", "SE", "CI", "Beta", "Beta CI", "df", "t", "p")
+table4rows <- c("Intercept", "T (within)", "C (within)", "T (between)",
+                "C (between)", "T x C (within)", "T x C (between)")
+table4 <- bind_rows(bind_cols(m.d_w[-c(1)], m.sol_w[-c(1)], m.dyad_w[-c(1)]),
+                          bind_cols(nc.d_w[-c(1)], nc.sol_w[-c(1)], nc.dyad_w[-c(1)]),
+                          bind_cols(hc.d_w[-c(1)], hc.sol_w[-c(1)], hc.dyad_w[-c(1)]))
+
+htmlTable(table4,
+          align = "c",
+          caption = "SDI-2 Model results",
+          rnames = c(table4rows, table4rows, table4rows),
+          header = c(table4cols, table4cols, table4cols),
+          col.rgroup = c("none", "#F7F7F7"),
+          cgroup = list(c("SDI-2"), c("General", "Solitary", "Dyadic")),
+          n.cgroup = list(c(3), c(8, 8, 8)),
+          tspanner = c("Men","Women not usng hormonal contraception", "Women using hormonal contraception"), n.tspanner = c(7,7),
+          css.tspanner = "padding-top: 0.5em; font-weight:bold",
+          css.cell = "padding-right: 0.5em")
+
+#####
+
+# do effects of C and T remain after accounting for effects of ovarian hormones on SDI and/or SOI in non-contracepting women?
+# no hormonal contraception
+
+nc.ov.d_w <- table.model(summary(lmer(sdi_mean ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                 ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.nc))) # sdi-2
+
+nc.ov.sol_w <- table.model(summary(lmer(sdi_sol ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                   ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.nc))) # sdi-2[solitary]
+
+nc.ov.dyad_w <- table.model(summary(lmer(sdi_dyad ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                    ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.nc))) # sdi-2[dyadic]
+
+nc.ov.s_w <- table.model(summary(lmer(soi_mean ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                 ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.nc))) # soiR
+
+nc.ov.att_w <- table.model(summary(lmer(soi_attit ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                   ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.nc))) # soi-R[attitude]
+
+nc.ov.beh_w <- table.model(summary(lmer(soi_behav ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                   ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.nc))) # soi-R[behavior]
+
+nc.ov.des_w <- table.model(summary(lmer(soi_des ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                   ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.nc))) # soi-R[desire]
+
+# hormonal contraception
+
+hc.ov.d_w <- table.model(summary(lmer(sdi_mean ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                                        ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.hc))) # sdi-2
+
+hc.ov.sol_w <- table.model(summary(lmer(sdi_sol ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                                          ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.hc))) # sdi-2[solitary]
+
+hc.ov.dyad_w <- table.model(summary(lmer(sdi_dyad ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                                           ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.hc))) # sdi-2[dyadic]
+
+hc.ov.s_w <- table.model(summary(lmer(soi_mean ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                                        ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.hc))) # soiR
+
+hc.ov.att_w <- table.model(summary(lmer(soi_attit ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                                          ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.hc))) # soi-R[attitude]
+
+hc.ov.beh_w <- table.model(summary(lmer(soi_behav ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                                          ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.hc))) # soi-R[behavior]
+
+hc.ov.des_w <- table.model(summary(lmer(soi_des ~ ihh_P.cwc*ihh_E.cwc + ihh_P.cm*ihh_E.cm + ihh_C.cwc*ihh_T.cwc +
+                                          ihh_C.cm*ihh_T.cm + (1 | subID), data = df_ihh.hc))) # soi-R[desire]
+
+# With predictor hormones log-transformed before centering and scaling
+
+### HORMONES ARE CENTERED: Within(cwc)- and between(cm)-individual effects ARE isolated; hormones are log-transformed
+
+# men
+
+m.d.log <- table.model(summary(lmer(sdi_mean ~ ihh_T.log.cwc*ihh_C.log.cwc +
+                                      ihh_T.log.cm*ihh_C.log.cm + (1 | subID), data = df.log_ihh.m))) # sdi-2
+
+m.sol.log <- table.model(summary(lmer(sdi_sol ~ ihh_T.log.cwc*ihh_C.log.cwc +
+                                        ihh_T.log.cm*ihh_C.log.cm + (1 | subID), data = df.log_ihh.m))) # sdi-2[solitary]
+
+m.dyad.log <- table.model(summary(lmer(sdi_dyad ~ ihh_T.log.cwc*ihh_C.log.cwc +
+                                         ihh_T.log.cm*ihh_C.log.cm + (1 | subID), data = df.log_ihh.m))) # sdi-2[dyadic]
+
+m.s.log <- table.model(summary(lmer(soi_mean ~ ihh_T.log.cwc*ihh_C.log.cwc +
+                                      ihh_T.log.cm*ihh_C.log.cm + (1 | subID), data = df.log_ihh.m))) # soiR
+
+m.att.log <- table.model(summary(lmer(soi_attit ~ ihh_T.log.cwc*ihh_C.log.cwc +
+                                        ihh_T.log.cm*ihh_C.log.cm + (1 | subID), data = df.log_ihh.m))) # soi-R[attitude]
+
+m.beh.log <- table.model(summary(lmer(soi_behav ~ ihh_T.log.cwc*ihh_C.log.cwc +
+                                        ihh_T.log.cm*ihh_C.log.cm + (1 | subID), data = df.log_ihh.m))) # soi-R[behavior]
+
+m.des.log <- table.model(summary(lmer(soi_des ~ ihh_T.log.cwc*ihh_C.log.cwc +
+                                        ihh_T.log.cm*ihh_C.log.cm + (1 | subID), data = df.log_ihh.m))) # soi-R[desire]
+
+# women
+
+w.d.log <- table.model(summary(lmer(sdi_mean ~ ihh_T.log.cwc*ihh_C.log.cwc*HC +
+                                      ihh_T.log.cm*ihh_C.log.cm*HC + (1 | subID), data = df.log_ihh.f))) # sdi-2
+
+w.sol.log <- table.model(summary(lmer(sdi_sol ~ ihh_T.log.cwc*ihh_C.log.cwc*HC +
+                                        ihh_T.log.cm*ihh_C.log.cm*HC + (1 | subID), data = df.log_ihh.f))) # sdi solitary
+
+w.dyad.log <- table.model(summary(lmer(sdi_dyad ~ ihh_T.log.cwc*ihh_C.log.cwc*HC + 
+                                         ihh_T.log.cm*ihh_C.log.cm*HC + (1 | subID), data = df.log_ihh.f))) # sdi dyadic
+
+w.s.log <- table.model(summary(lmer(soi_mean ~ ihh_T.log.cwc*ihh_C.log.cwc*HC +
+                                      ihh_T.log.cm*ihh_C.log.cm*HC + (1 | subID), data = df.log_ihh.f))) # soiR
+
+w.att.log <- table.model(summary(lmer(soi_attit ~ ihh_T.log.cwc*ihh_C.log.cwc*HC +
+                                        ihh_T.log.cm*ihh_C.log.cm*HC + (1 | subID), data = df.log_ihh.f))) # attitude
+
+w.beh.log <- table.model(summary(lmer(soi_behav ~ ihh_T.log.cwc*ihh_C.log.cwc*HC +
+                                        ihh_T.log.cm*ihh_C.log.cm*HC + (1 | subID), data = df.log_ihh.f))) # behavior
+
+w.des.log <- table.model(summary(lmer(soi_des ~ ihh_T.log.cwc*ihh_C.log.cwc*HC +
+                                        ihh_T.log.cm*ihh_C.log.cm*HC + (1 | subID), data = df.log_ihh.f))) # soi desire
+
+# men
+
+m.d_w_age <- table.model(summary(lmer(sdi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + age + (1 | subID), data = df_ihh.m))) # sdi-2
+
+m.sol_w_age <- table.model(summary(lmer(sdi_sol ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + age + (1 | subID), data = df_ihh.m))) # sdi-2[solitary]
+
+m.dyad_w_age <- table.model(summary(lmer(sdi_dyad ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + age + (1 | subID), data = df_ihh.m))) # sdi-2[dyadic]
+
+m.s_w_age <- table.model(summary(lmer(soi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + age + (1 | subID), data = df_ihh.m))) # soiR
+
+m.att_w_age <- table.model(summary(lmer(soi_attit ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + age + (1 | subID), data = df_ihh.m))) # soi-R[attitude]
+
+m.beh_w_age <- table.model(summary(lmer(soi_behav ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + age + (1 | subID), data = df_ihh.m))) # soi-R[behavior]
+
+m.des_w_age <- table.model(summary(lmer(soi_des ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + age + (1 | subID), data = df_ihh.m))) # soi-R[desire]
+
+# women
+
+w.d_w_age <- table.model(summary(lmer(sdi_mean ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + age + (1 | subID), data = df_ihh.f))) # sdi-2
+
+w.sol_w_age <- table.model(summary(lmer(sdi_sol ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + age + (1 | subID), data = df_ihh.f))) # sdi-2[solitary]
+
+w.dyad_w_age <- table.model(summary(lmer(sdi_dyad ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + age + (1 | subID), data = df_ihh.f))) # sdi-2[dyadic]
+
+w.s_w_age <- table.model(summary(lmer(soi_mean ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + age + (1 | subID), data = df_ihh.f))) # soiR
+
+w.att_w_age <- table.model(summary(lmer(soi_attit ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + age + (1 | subID), data = df_ihh.f))) # soi-R[attitude]
+
+w.beh_w_age <- table.model(summary(lmer(soi_behav ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + age + (1 | subID), data = df_ihh.f))) # soi-R[behavior]
+
+w.des_w_age <- table.model(summary(lmer(soi_des ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + age + (1 | subID), data = df_ihh.f))) # soi-R[desire]
+
+### Main analyses repeated with random slopes
+
+# men
+
+m.d_w_slopes <- table.model(summary(lmer(sdi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                  data = df_ihh.m))) # sdi-2
+
+m.sol_w_slopes <- table.model(summary(lmer(sdi_sol ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                    data = df_ihh.m))) # sdi-2[solitary]
+
+m.dyad_w_slopes <- table.model(summary(lmer(sdi_dyad ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                     data = df_ihh.m))) # sdi-2[dyadic]
+
+m.s_w_slopes <- table.model(summary(lmer(soi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                  data = df_ihh.m))) # soiR
+
+m.att_w_slopes <- table.model(summary(lmer(soi_attit ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                    data = df_ihh.m))) # soi-R[attitude]
+
+m.beh_w_slopes <- table.model(summary(lmer(soi_behav ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                    data = df_ihh.m))) # soi-R[behavior]
+
+m.des_w_slopes <- table.model(summary(lmer(soi_des ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                    data = df_ihh.m))) # soi-R[desire]
+
+# women
+
+w.d_w_slopes <- table.model(summary(lmer(sdi_mean ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                  data = df_ihh.f))) # sdi-2
+
+w.sol_w_slopes <- table.model(summary(lmer(sdi_sol ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                    data = df_ihh.f))) # sdi-2[solitary]
+
+w.dyad_w_slopes <- table.model(summary(lmer(sdi_dyad ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                     data = df_ihh.f))) # sdi-2[dyadic]
+
+w.s_w_slopes <- table.model(summary(lmer(soi_mean ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                  data = df_ihh.f))) # soiR
+
+w.att_w_slopes <- table.model(summary(lmer(soi_attit ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                    data = df_ihh.f))) # soi-R[attitude]
+
+w.beh_w_slopes <- table.model(summary(lmer(soi_behav ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                    data = df_ihh.f))) # soi-R[behavior]
+
+w.des_w_slopes <- table.model(summary(lmer(soi_des ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 + ihh_T.cwc*ihh_C.cwc || subID),
+                                    data = df_ihh.f))) # soi-R[desire]
+
+### Main analyses excluding 14 subjects over age 45 (11 women, 3 men)
+
+# men
+
+m.d_w_age.out <- table.model(summary(lmer(sdi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df_ihh.m %>% filter(age<46)))) # sdi-2
+
+m.sol_w_age.out <- table.model(summary(lmer(sdi_sol ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                            data = df_ihh.m %>% filter(age<46)))) # sdi-2[solitary]
+
+m.dyad_w_age.out <- table.model(summary(lmer(sdi_dyad ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                             data = df_ihh.m %>% filter(age<46)))) # sdi-2[dyadic]
+
+m.s_w_age.out <- table.model(summary(lmer(soi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID), data = df_ihh.m %>% filter(age<46)))) # soiR
+
+m.att_w_age.out <- table.model(summary(lmer(soi_attit ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                            data = df_ihh.m %>% filter(age<46)))) # soi-R[attitude]
+
+m.beh_w_age.out <- table.model(summary(lmer(soi_behav ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                            data = df_ihh.m %>% filter(age<46)))) # soi-R[behavior]
+
+m.des_w_age.out <- table.model(summary(lmer(soi_des ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                            data = df_ihh.m %>% filter(age<46)))) # soi-R[desire]
+
+# women
+
+w.d_w_age.out <- table.model(summary(lmer(sdi_mean ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                          data = df_ihh.f %>% filter(age<46)))) # sdi-2
+
+w.sol_w_age.out <- table.model(summary(lmer(sdi_sol ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                            data = df_ihh.f %>% filter(age<46)))) # sdi-2[solitary]
+
+w.dyad_w_age.out <- table.model(summary(lmer(sdi_dyad ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                             data = df_ihh.f %>% filter(age<46)))) # sdi-2[dyadic]
+
+w.s_w_age.out <- table.model(summary(lmer(soi_mean ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                          data = df_ihh.f %>% filter(age<46)))) # soiR
+
+w.att_w_age.out <- table.model(summary(lmer(soi_attit ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                            data = df_ihh.f %>% filter(age<46)))) # soi-R[attitude]
+
+w.beh_w_age.out <- table.model(summary(lmer(soi_behav ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                            data = df_ihh.f %>% filter(age<46)))) # soi-R[behavior]
+
+w.des_w_age.out <- table.model(summary(lmer(soi_des ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                            data = df_ihh.f %>% filter(age<46)))) # soi-R[desire]
+
+### Main analyses excluding one woman who attended a single session and whose cortisol measured over 50 pg/mL
+
+# women
+
+w.d_w_C.out <- table.model(summary(lmer(sdi_mean ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                          data = df_ihh.f %>% filter(ihh_C<50)))) # sdi-2
+
+w.sol_w_C.out <- table.model(summary(lmer(sdi_sol ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                            data = df_ihh.f %>% filter(ihh_C<50)))) # sdi-2[solitary]
+
+w.dyad_w_C.out <- table.model(summary(lmer(sdi_dyad ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                             data = df_ihh.f %>% filter(ihh_C<50)))) # sdi-2[dyadic]
+
+w.s_w_C.out <- table.model(summary(lmer(soi_mean ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                          data = df_ihh.f %>% filter(ihh_C<50)))) # soiR
+
+w.att_w_C.out <- table.model(summary(lmer(soi_attit ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                            data = df_ihh.f %>% filter(ihh_C<50)))) # soi-R[attitude]
+
+w.beh_w_C.out <- table.model(summary(lmer(soi_behav ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                            data = df_ihh.f %>% filter(ihh_C<50)))) # soi-R[behavior]
+
+w.des_w_C.out <- table.model(summary(lmer(soi_des ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                            data = df_ihh.f %>% filter(ihh_C<50)))) # soi-R[desire]
+
+### Main analyses excluding five NC and ten HC women whose testosterone measured over 50 pg/mL
+
+# all women
+
+w.d_w_T.out <- table.model(summary(lmer(sdi_mean ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                        data = df_ihh.f %>% filter(ihh_T<50)))) # sdi-2
+
+w.sol_w_T.out <- table.model(summary(lmer(sdi_sol ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                          data = df_ihh.f %>% filter(ihh_T<50)))) # sdi-2[solitary]
+
+w.dyad_w_T.out <- table.model(summary(lmer(sdi_dyad ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                           data = df_ihh.f %>% filter(ihh_T<50)))) # sdi-2[dyadic]
+
+w.s_w_T.out <- table.model(summary(lmer(soi_mean ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                        data = df_ihh.f %>% filter(ihh_T<50)))) # soiR
+
+w.att_w_T.out <- table.model(summary(lmer(soi_attit ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                          data = df_ihh.f %>% filter(ihh_T<50)))) # soi-R[attitude]
+
+w.beh_w_T.out <- table.model(summary(lmer(soi_behav ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                          data = df_ihh.f %>% filter(ihh_T<50)))) # soi-R[behavior]
+
+w.des_w_T.out <- table.model(summary(lmer(soi_des ~ ihh_T.cwc*ihh_C.cwc*HC + ihh_T.cm*ihh_C.cm*HC + (1 | subID),
+                                          data = df_ihh.f %>% filter(ihh_T<50)))) # soi-R[desire]
+
+# NC women
+
+nc.d_w_T.out <- table.model(summary(lmer(sdi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                        data = df_ihh.nc %>% filter(ihh_T<50)))) # sdi-2
+
+nc.sol_w_T.out <- table.model(summary(lmer(sdi_sol ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                          data = df_ihh.nc %>% filter(ihh_T<50)))) # sdi-2[solitary]
+
+nc.dyad_w_T.out <- table.model(summary(lmer(sdi_dyad ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                           data = df_ihh.nc %>% filter(ihh_T<50)))) # sdi-2[dyadic]
+
+nc.s_w_T.out <- table.model(summary(lmer(soi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                        data = df_ihh.nc %>% filter(ihh_T<50)))) # soiR
+
+nc.att_w_T.out <- table.model(summary(lmer(soi_attit ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                          data = df_ihh.nc %>% filter(ihh_T<50)))) # soi-R[attitude]
+
+nc.beh_w_T.out <- table.model(summary(lmer(soi_behav ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                          data = df_ihh.nc %>% filter(ihh_T<50)))) # soi-R[behavior]
+
+nc.des_w_T.out <- table.model(summary(lmer(soi_des ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                          data = df_ihh.nc %>% filter(ihh_T<50)))) # soi-R[desire]
+
+# HC women
+
+hc.d_w_T.out <- table.model(summary(lmer(sdi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                         data = df_ihh.hc %>% filter(ihh_T<50)))) # sdi-2
+
+hc.sol_w_T.out <- table.model(summary(lmer(sdi_sol ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                           data = df_ihh.hc %>% filter(ihh_T<50)))) # sdi-2[solitary]
+
+hc.dyad_w_T.out <- table.model(summary(lmer(sdi_dyad ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                            data = df_ihh.hc %>% filter(ihh_T<50)))) # sdi-2[dyadic]
+
+hc.s_w_T.out <- table.model(summary(lmer(soi_mean ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                         data = df_ihh.hc %>% filter(ihh_T<50)))) # soiR
+
+hc.att_w_T.out <- table.model(summary(lmer(soi_attit ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                           data = df_ihh.hc %>% filter(ihh_T<50)))) # soi-R[attitude]
+
+hc.beh_w_T.out <- table.model(summary(lmer(soi_behav ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                           data = df_ihh.hc %>% filter(ihh_T<50)))) # soi-R[behavior]
+
+hc.des_w_T.out <- table.model(summary(lmer(soi_des ~ ihh_T.cwc*ihh_C.cwc + ihh_T.cm*ihh_C.cm + (1 | subID),
+                                           data = df_ihh.hc %>% filter(ihh_T<50)))) # soi-R[desire]
+
