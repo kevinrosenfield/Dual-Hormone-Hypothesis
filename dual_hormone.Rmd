@@ -612,7 +612,7 @@ figureMen <- ggarrange(m.sol,m.dyad, ncol=2, nrow=1) %>%
 figureMen
 ```
 
-### Simple slopes data for various groups. Lines represnt subfacets of sexual desire as functions of testosterone at 5 cortisol levels
+### Simple slopes data for various groups. Lines represent subfacets of sexual desire as functions of testosterone at 5 cortisol levels
 ```{r simple slopes stats, echo=FALSE}
 
 htmlTable(stats.nc, caption = "Dydadic Desire - Women NOT ON hormonal contracption")
